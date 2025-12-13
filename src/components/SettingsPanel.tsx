@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
-import type { ClaudeSettings } from '../types/claude';
+import type { ClaudeSettings, EnvProfile } from '../types/claude';
 
 interface SettingsPanelProps {
   settings: ClaudeSettings;
   claudeDataPath: string;
   theme: 'light' | 'dark' | 'system';
+  editingProfile?: EnvProfile | null;
   onSaveSettings: (settings: ClaudeSettings) => void;
   onThemeChange: (theme: 'light' | 'dark' | 'system') => void;
   onClose: () => void;
@@ -14,12 +15,16 @@ export function SettingsPanel({
   settings,
   claudeDataPath,
   theme,
+  editingProfile,
   onSaveSettings,
   onThemeChange,
   onClose,
 }: SettingsPanelProps) {
   const [editedSettings, setEditedSettings] = useState<ClaudeSettings>(settings);
-  const [activeTab, setActiveTab] = useState<'general' | 'env' | 'permissions'>('general');
+  // 如果正在编辑配置，自动切换到环境变量标签页
+  const [activeTab, setActiveTab] = useState<'general' | 'env' | 'permissions'>(
+    editingProfile ? 'env' : 'general'
+  );
   const [hasChanges, setHasChanges] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
 
@@ -75,7 +80,9 @@ export function SettingsPanel({
       <div className="bg-card rounded-xl shadow-xl w-[600px] max-h-[80vh] flex flex-col">
         {/* 头部 */}
         <div className="p-4 border-b border-border flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-foreground">设置</h2>
+          <h2 className="text-lg font-semibold text-foreground">
+            {editingProfile ? `编辑配置: ${editingProfile.name}` : '设置'}
+          </h2>
           <button
             onClick={onClose}
             className="p-2 rounded-lg hover:bg-accent transition-colors"

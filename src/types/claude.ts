@@ -10,6 +10,21 @@ export interface ClaudeSettings {
   apiKey?: string;
 }
 
+// 环境配置组
+export interface EnvProfile {
+  id: string;
+  name: string;
+  env: Record<string, string>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// 环境切换器配置（存储在单独的文件中）
+export interface EnvSwitcherConfig {
+  profiles: EnvProfile[];
+  activeProfileId: string | null;
+}
+
 export interface HistoryEntry {
   display: string;
   pastedContents: Record<string, PastedContent>;

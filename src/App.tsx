@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Sidebar, ChatView, SettingsPanel } from './components';
-import type { Project, Session, SessionMessage, ClaudeSettings } from './types/claude';
+import type { Project, Session, SessionMessage, ClaudeSettings, EnvSwitcherConfig, EnvProfile } from './types/claude';
 import {
   getClaudeDataPath,
   getProjects,
@@ -9,6 +9,11 @@ import {
   readSessionMessages,
   deleteMessage,
   editMessageContent,
+  readEnvSwitcherConfig,
+  saveEnvSwitcherConfig,
+  applyEnvProfile,
+  saveCurrentAsProfile,
+  createEnvProfile,
 } from './utils/claudeData';
 
 function App() {
@@ -18,7 +23,9 @@ function App() {
   const [currentSession, setCurrentSession] = useState<Session | null>(null);
   const [messages, setMessages] = useState<SessionMessage[]>([]);
   const [settings, setSettings] = useState<ClaudeSettings>({});
+  const [envConfig, setEnvConfig] = useState<EnvSwitcherConfig>({ profiles: [], activeProfileId: null });
   const [showSettings, setShowSettings] = useState(false);
+  const [editingEnvProfile, setEditingEnvProfile] = useState<EnvProfile | null>(null);
   const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('system');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -40,13 +47,15 @@ function App() {
         const path = await getClaudeDataPath();
         setClaudeDataPath(path);
 
-        const [loadedSettings, loadedProjects] = await Promise.all([
+        const [loadedSettings, loadedProjects, loadedEnvConfig] = await Promise.all([
           readSettings(path),
           getProjects(path),
+          readEnvSwitcherConfig(path),
         ]);
 
         setSettings(loadedSettings);
         setProjects(loadedProjects);
+        setEnvConfig(loadedEnvConfig);
         setError(null);
       } catch (err) {
         console.error('初始化失败:', err);
@@ -124,6 +133,94 @@ function App() {
     [claudeDataPath]
   );
 
+  // 环境配置切换
+  const handleSwitchEnvProfile = useCallback(
+    async (profile: EnvProfile) => {
+      try {
+        const updatedSettings = await applyEnvProfile(claudeDataPath, profile);
+        setSettings(updatedSettings);
+
+        const updatedConfig = {
+          ...envConfig,
+          activeProfileId: profile.id,
+        };
+        await saveEnvSwitcherConfig(claudeDataPath, updatedConfig);
+        setEnvConfig(updatedConfig);
+      } catch (err) {
+        console.error('切换环境配置失败:', err);
+      }
+    },
+    [claudeDataPath, envConfig]
+  );
+
+  // 保存当前配置
+  const handleSaveEnvProfile = useCallback(
+    async (name: string) => {
+      try {
+        const profile = await saveCurrentAsProfile(claudeDataPath, name);
+        const updatedConfig = await readEnvSwitcherConfig(claudeDataPath);
+        setEnvConfig(updatedConfig);
+        console.log('保存配置成功:', profile.name);
+      } catch (err) {
+        console.error('保存环境配置失败:', err);
+      }
+    },
+    [claudeDataPath]
+  );
+
+  // 删除配置
+  const handleDeleteEnvProfile = useCallback(
+    async (profileId: string) => {
+      try {
+        const updatedConfig = {
+          ...envConfig,
+          profiles: envConfig.profiles.filter(p => p.id !== profileId),
+          activeProfileId: envConfig.activeProfileId === profileId ? null : envConfig.activeProfileId,
+        };
+        await saveEnvSwitcherConfig(claudeDataPath, updatedConfig);
+        setEnvConfig(updatedConfig);
+      } catch (err) {
+        console.error('删除环境配置失败:', err);
+      }
+    },
+    [claudeDataPath, envConfig]
+  );
+
+  // 编辑配置（打开设置面板并预填充）
+  const handleEditEnvProfile = useCallback((profile: EnvProfile) => {
+    setEditingEnvProfile(profile);
+    setShowSettings(true);
+  }, []);
+
+  // 保存编辑后的配置
+  const handleSaveEditedProfile = useCallback(
+    async (profile: EnvProfile) => {
+      try {
+        const updatedProfile = {
+          ...profile,
+          updatedAt: new Date().toISOString(),
+        };
+        const updatedConfig = {
+          ...envConfig,
+          profiles: envConfig.profiles.map(p => p.id === profile.id ? updatedProfile : p),
+        };
+        await saveEnvSwitcherConfig(claudeDataPath, updatedConfig);
+        setEnvConfig(updatedConfig);
+
+        // 如果是当前激活的配置，同时更新 settings
+        if (profile.id === envConfig.activeProfileId) {
+          await applyEnvProfile(claudeDataPath, updatedProfile);
+          setSettings(prev => ({ ...prev, env: updatedProfile.env }));
+        }
+
+        setEditingEnvProfile(null);
+      } catch (err) {
+        console.error('保存编辑配置失败:', err);
+      }
+    },
+    [claudeDataPath, envConfig]
+  );
+
   if (loading) {
     return (
       <div className="h-screen flex items-center justify-center bg-background">
@@ -171,9 +268,14 @@ function App() {
         projects={projects}
         currentProject={currentProject}
         currentSession={currentSession}
+        envConfig={envConfig}
         onSelectProject={setCurrentProject}
         onSelectSession={handleSelectSession}
         onOpenSettings={() => setShowSettings(true)}
+        onSwitchEnvProfile={handleSwitchEnvProfile}
+        onSaveEnvProfile={handleSaveEnvProfile}
+        onDeleteEnvProfile={handleDeleteEnvProfile}
+        onEditEnvProfile={handleEditEnvProfile}
       />
 
       <ChatView
@@ -186,12 +288,23 @@ function App() {
 
       {showSettings && (
         <SettingsPanel
-          settings={settings}
+          settings={editingEnvProfile ? { ...settings, env: editingEnvProfile.env } : settings}
           claudeDataPath={claudeDataPath}
           theme={theme}
-          onSaveSettings={handleSaveSettings}
+          editingProfile={editingEnvProfile}
+          onSaveSettings={editingEnvProfile ?
+            (newSettings) => {
+              if (editingEnvProfile) {
+                handleSaveEditedProfile({ ...editingEnvProfile, env: newSettings.env || {} });
+              }
+            } :
+            handleSaveSettings
+          }
           onThemeChange={setTheme}
-          onClose={() => setShowSettings(false)}
+          onClose={() => {
+            setShowSettings(false);
+            setEditingEnvProfile(null);
+          }}
         />
       )}
     </div>
