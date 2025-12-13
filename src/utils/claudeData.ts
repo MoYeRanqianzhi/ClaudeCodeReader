@@ -1,10 +1,99 @@
-import type { ClaudeSettings, Project, Session, SessionMessage, HistoryEntry, MessageContent } from '../types/claude';
+import type { ClaudeSettings, Project, Session, SessionMessage, HistoryEntry, MessageContent, EnvSwitcherConfig, EnvProfile } from '../types/claude';
 
 // 获取Claude数据目录路径
 export async function getClaudeDataPath(): Promise<string> {
   const { homeDir, join } = await import('@tauri-apps/api/path');
   const home = await homeDir();
   return join(home, '.claude');
+}
+
+// 获取CCR配置目录路径 (~/.mo/CCR/)
+async function getCCRConfigPath(): Promise<string> {
+  const { homeDir, join } = await import('@tauri-apps/api/path');
+  const { mkdir, exists } = await import('@tauri-apps/plugin-fs');
+  const home = await homeDir();
+  const ccrPath = await join(home, '.mo', 'CCR');
+
+  // 确保目录存在
+  if (!await exists(ccrPath)) {
+    await mkdir(ccrPath, { recursive: true });
+  }
+
+  return ccrPath;
+}
+
+// 获取环境切换器配置文件路径
+async function getEnvSwitcherConfigPath(): Promise<string> {
+  const { join } = await import('@tauri-apps/api/path');
+  const ccrPath = await getCCRConfigPath();
+  return join(ccrPath, 'env-profiles.json');
+}
+
+// 读取环境切换器配置
+export async function readEnvSwitcherConfig(_claudePath: string): Promise<EnvSwitcherConfig> {
+  const { readTextFile, exists } = await import('@tauri-apps/plugin-fs');
+  const configPath = await getEnvSwitcherConfigPath();
+
+  if (await exists(configPath)) {
+    const content = await readTextFile(configPath);
+    return JSON.parse(content);
+  }
+
+  return { profiles: [], activeProfileId: null };
+}
+
+// 保存环境切换器配置
+export async function saveEnvSwitcherConfig(_claudePath: string, config: EnvSwitcherConfig): Promise<void> {
+  const { writeTextFile } = await import('@tauri-apps/plugin-fs');
+  const configPath = await getEnvSwitcherConfigPath();
+  await writeTextFile(configPath, JSON.stringify(config, null, 2));
+}
+
+// 生成唯一ID
+function generateId(): string {
+  return Date.now().toString(36) + Math.random().toString(36).substring(2);
+}
+
+// 创建新的环境配置
+export function createEnvProfile(name: string, env: Record<string, string>): EnvProfile {
+  const now = new Date().toISOString();
+  return {
+    id: generateId(),
+    name,
+    env,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+// 应用环境配置到 settings
+export async function applyEnvProfile(
+  claudePath: string,
+  profile: EnvProfile
+): Promise<ClaudeSettings> {
+  const settings = await readSettings(claudePath);
+  const updatedSettings = {
+    ...settings,
+    env: { ...profile.env },
+  };
+  await saveSettings(claudePath, updatedSettings);
+  return updatedSettings;
+}
+
+// 从当前 settings 保存为新配置
+export async function saveCurrentAsProfile(
+  claudePath: string,
+  name: string
+): Promise<EnvProfile> {
+  const settings = await readSettings(claudePath);
+  const profile = createEnvProfile(name, settings.env || {});
+
+  const config = await readEnvSwitcherConfig(claudePath);
+  config.profiles.push(profile);
+  config.activeProfileId = profile.id;
+  await saveEnvSwitcherConfig(claudePath, config);
+
+  return profile;
 }
 
 // 读取设置文件

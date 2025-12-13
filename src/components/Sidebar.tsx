@@ -1,23 +1,34 @@
 import { useState } from 'react';
-import type { Project, Session } from '../types/claude';
+import type { Project, Session, EnvProfile, EnvSwitcherConfig } from '../types/claude';
 import { formatTimestamp } from '../utils/claudeData';
+import { EnvSwitcher } from './EnvSwitcher';
 
 interface SidebarProps {
   projects: Project[];
   currentProject: Project | null;
   currentSession: Session | null;
+  envConfig: EnvSwitcherConfig;
   onSelectProject: (project: Project) => void;
   onSelectSession: (session: Session) => void;
   onOpenSettings: () => void;
+  onSwitchEnvProfile: (profile: EnvProfile) => void;
+  onSaveEnvProfile: (name: string) => void;
+  onDeleteEnvProfile: (profileId: string) => void;
+  onEditEnvProfile: (profile: EnvProfile) => void;
 }
 
 export function Sidebar({
   projects,
   currentProject,
   currentSession,
+  envConfig,
   onSelectProject,
   onSelectSession,
   onOpenSettings,
+  onSwitchEnvProfile,
+  onSaveEnvProfile,
+  onDeleteEnvProfile,
+  onEditEnvProfile,
 }: SidebarProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
@@ -44,6 +55,7 @@ export function Sidebar({
       <div className="p-4 border-b border-border">
         <div className="flex items-center justify-between mb-3">
           <h1 className="text-lg font-semibold text-foreground">Claude Code Reader</h1>
+          {/* 设置按钮 */}
           <button
             onClick={onOpenSettings}
             className="p-2 rounded-lg hover:bg-accent transition-colors"
@@ -54,6 +66,17 @@ export function Sidebar({
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
             </svg>
           </button>
+        </div>
+
+        {/* 环境切换器 */}
+        <div className="mb-3">
+          <EnvSwitcher
+            config={envConfig}
+            onSwitchProfile={onSwitchEnvProfile}
+            onSaveCurrentAsProfile={onSaveEnvProfile}
+            onDeleteProfile={onDeleteEnvProfile}
+            onEditProfile={onEditEnvProfile}
+          />
         </div>
 
         {/* 搜索框 */}
