@@ -1,6 +1,6 @@
 {
   "name": "claude-code-reader",
-  "version": "0.1.0",
+  "version": "0.1.0-beta.1",
   "type": "module",
   "description": "A desktop application for viewing and managing Claude Code session records and settings",
   "author": "墨叶染千枝",
