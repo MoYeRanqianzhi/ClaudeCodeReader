@@ -1,0 +1,43 @@
+{
+  "name": "claude-code-reader",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "A desktop application for viewing and managing Claude Code session records and settings",
+  "author": "墨叶染千枝",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MoYeRanQianZhi/ClaudeCodeReader.git"
+  },
+  "homepage": "https://github.com/MoYeRanQianZhi/ClaudeCodeReader",
+  "bugs": {
+    "url": "https://github.com/MoYeRanQianZhi/ClaudeCodeReader/issues"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "reader",
+    "viewer",
+    "session",
+    "tauri",
+    "desktop"
+  ],
+  "bin": {
+    "ccr": "./bin/ccr.js"
+  },
+  "scripts": {
+    "postinstall": "node scripts/postinstall.js"
+  },
+  "files": [
+    "bin",
+    "scripts"
+  ],
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "os": [
+    "win32",
+    "darwin",
+    "linux"
+  ]
+}
