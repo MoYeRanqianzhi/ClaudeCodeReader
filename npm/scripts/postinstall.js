@@ -18,7 +18,7 @@ const arch = process.arch;
 function getDownloadInfo() {
   if (platform === 'win32') {
     return {
-      url: `${BASE_URL}/ClaudeCodeReader.exe`,
+      url: `${BASE_URL}/claude-code-reader.exe`,
       filename: 'ClaudeCodeReader.exe'
     };
   } else if (platform === 'darwin') {
