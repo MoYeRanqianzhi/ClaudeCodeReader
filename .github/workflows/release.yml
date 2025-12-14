@@ -81,20 +81,27 @@ jobs:
 
       - name: Upload Windows binary
         if: matrix.platform == 'windows-latest'
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          cp src-tauri/target/release/claude-code-reader.exe "ClaudeCodeReader_${VERSION}_x64.exe"
+        shell: bash
+      - name: Upload Windows binary to release
+        if: matrix.platform == 'windows-latest'
         uses: softprops/action-gh-release@v2
         with:
-          files: src-tauri/target/release/claude-code-reader.exe
+          files: ClaudeCodeReader_*_x64.exe
 
       - name: Upload macOS binary
         if: matrix.platform == 'macos-latest'
         run: |
+          VERSION=${GITHUB_REF_NAME#v}
           cd src-tauri/target/${{ matrix.target }}/release/bundle/macos
-          tar -czvf ClaudeCodeReader_${{ matrix.target }}.app.tar.gz ClaudeCodeReader.app
-      - name: Upload macOS portable to release
+          tar -czvf ClaudeCodeReader_${VERSION}_${{ matrix.target }}.app.tar.gz ClaudeCodeReader.app
+      - name: Upload macOS binary to release
         if: matrix.platform == 'macos-latest'
         uses: softprops/action-gh-release@v2
         with:
-          files: src-tauri/target/${{ matrix.target }}/release/bundle/macos/ClaudeCodeReader_${{ matrix.target }}.app.tar.gz
+          files: src-tauri/target/${{ matrix.target }}/release/bundle/macos/ClaudeCodeReader_*_${{ matrix.target }}.app.tar.gz
 
   publish-npm:
     needs: build-tauri
