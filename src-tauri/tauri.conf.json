@@ -1,6 +1,6 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "Claude Code Reader",
+  "productName": "ClaudeCodeReader",
   "version": "0.1.0-beta.2",
   "identifier": "com.claudecodereader.app",
   "build": {
