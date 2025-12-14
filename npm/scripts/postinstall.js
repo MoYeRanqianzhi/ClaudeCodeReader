@@ -18,13 +18,13 @@ const arch = process.arch;
 function getDownloadInfo() {
   if (platform === 'win32') {
     return {
-      url: `${BASE_URL}/claude-code-reader.exe`,
+      url: `${BASE_URL}/ClaudeCodeReader_${VERSION}_x64.exe`,
       filename: 'ClaudeCodeReader.exe'
     };
   } else if (platform === 'darwin') {
     const macArch = arch === 'arm64' ? 'aarch64-apple-darwin' : 'x86_64-apple-darwin';
     return {
-      url: `${BASE_URL}/ClaudeCodeReader_${macArch}.app.tar.gz`,
+      url: `${BASE_URL}/ClaudeCodeReader_${VERSION}_${macArch}.app.tar.gz`,
       filename: `ClaudeCodeReader.app.tar.gz`,
       extract: true
     };
