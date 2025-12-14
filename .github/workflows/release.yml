@@ -104,8 +104,18 @@ jobs:
           VERSION=${GITHUB_REF_NAME#v}
           sed -i "s/const VERSION = '.*'/const VERSION = '$VERSION'/" scripts/postinstall.js
 
+      - name: Fix package.json
+        working-directory: npm
+        run: npm pkg fix
+
       - name: Publish to NPM
         working-directory: npm
-        run: npm publish --access public
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          if [[ "$VERSION" == *"beta"* ]] || [[ "$VERSION" == *"alpha"* ]]; then
+            npm publish --access public --tag beta
+          else
+            npm publish --access public
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
