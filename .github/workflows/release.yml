@@ -79,11 +79,11 @@ jobs:
           releaseId: ${{ needs.create-release.outputs.release_id }}
           args: ${{ matrix.args }}
 
-      - name: Upload Windows portable binary
+      - name: Upload Windows binary
         if: matrix.platform == 'windows-latest'
         uses: softprops/action-gh-release@v2
         with:
-          files: src-tauri/target/release/ClaudeCodeReader.exe
+          files: src-tauri/target/release/claude-code-reader.exe
 
       - name: Upload macOS binary
         if: matrix.platform == 'macos-latest'
