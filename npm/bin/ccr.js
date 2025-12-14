@@ -13,11 +13,11 @@ const platform = process.platform;
 let binaryPath;
 
 if (platform === 'win32') {
-  binaryPath = join(__dirname, 'Claude Code Reader.exe');
+  binaryPath = join(__dirname, 'ClaudeCodeReader.exe');
 } else if (platform === 'darwin') {
-  binaryPath = join(__dirname, 'Claude Code Reader.app', 'Contents', 'MacOS', 'Claude Code Reader');
+  binaryPath = join(__dirname, 'ClaudeCodeReader.app', 'Contents', 'MacOS', 'ClaudeCodeReader');
 } else if (platform === 'linux') {
-  binaryPath = join(__dirname, 'claude-code-reader.AppImage');
+  binaryPath = join(__dirname, 'ClaudeCodeReader.AppImage');
 } else {
   console.error(`Unsupported platform: ${platform}`);
   process.exit(1);

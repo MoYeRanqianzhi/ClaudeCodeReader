@@ -18,20 +18,20 @@ const arch = process.arch;
 function getDownloadInfo() {
   if (platform === 'win32') {
     return {
-      url: `${BASE_URL}/Claude.Code.Reader_${VERSION}_x64-setup.exe`,
-      filename: 'Claude Code Reader.exe'
+      url: `${BASE_URL}/ClaudeCodeReader_${VERSION}_x64-setup.exe`,
+      filename: 'ClaudeCodeReader.exe'
     };
   } else if (platform === 'darwin') {
     const macArch = arch === 'arm64' ? 'aarch64' : 'x64';
     return {
-      url: `${BASE_URL}/Claude.Code.Reader_${VERSION}_${macArch}.app.tar.gz`,
-      filename: `Claude.Code.Reader.app.tar.gz`,
+      url: `${BASE_URL}/ClaudeCodeReader_${VERSION}_${macArch}.app.tar.gz`,
+      filename: `ClaudeCodeReader.app.tar.gz`,
       extract: true
     };
   } else if (platform === 'linux') {
     return {
-      url: `${BASE_URL}/claude-code-reader_${VERSION}_amd64.AppImage`,
-      filename: 'claude-code-reader.AppImage'
+      url: `${BASE_URL}/ClaudeCodeReader_${VERSION}_amd64.AppImage`,
+      filename: 'ClaudeCodeReader.AppImage'
     };
   }
   return null;
@@ -99,7 +99,7 @@ async function main() {
   const destPath = join(binDir, downloadInfo.filename);
 
   // Check if already downloaded
-  if (existsSync(destPath) || (platform === 'darwin' && existsSync(join(binDir, 'Claude Code Reader.app')))) {
+  if (existsSync(destPath) || (platform === 'darwin' && existsSync(join(binDir, 'ClaudeCodeReader.app')))) {
     console.log('Claude Code Reader is already installed.');
     return;
   }
