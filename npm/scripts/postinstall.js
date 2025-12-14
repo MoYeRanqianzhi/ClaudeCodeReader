@@ -8,7 +8,7 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const VERSION = '0.1.0-beta.1';
+const VERSION = '0.1.0-beta.2';
 const GITHUB_REPO = 'MoYeRanQianZhi/ClaudeCodeReader';
 const BASE_URL = `https://github.com/${GITHUB_REPO}/releases/download/v${VERSION}`;
 
