@@ -8,6 +8,8 @@
 ![](https://img.shields.io/badge/Node.js-16%2B-brightgreen?style=flat-square)
 ![](https://img.shields.io/github/stars/MoYeRanQianZhi/ClaudeCodeReader?style=flat-square&logo=github)
 
+[简体中文](README_CN.md) / English
+
 A desktop app for viewing and managing Claude Code sessions and settings.
 
 ## Install
