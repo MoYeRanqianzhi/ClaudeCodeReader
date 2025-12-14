@@ -13,7 +13,6 @@ import {
   saveEnvSwitcherConfig,
   applyEnvProfile,
   saveCurrentAsProfile,
-  createEnvProfile,
 } from './utils/claudeData';
 
 function App() {
