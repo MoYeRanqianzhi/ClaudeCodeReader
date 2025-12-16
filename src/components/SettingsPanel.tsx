@@ -240,7 +240,7 @@ export function SettingsPanel({
               {/* 应用信息 */}
               <div className="text-center py-4">
                 <h3 className="text-xl font-semibold text-foreground mb-2">Claude Code Reader</h3>
-                <p className="text-sm text-muted-foreground">v0.1.0-beta.3</p>
+                <p className="text-sm text-muted-foreground">v0.1.0-beta.4</p>
               </div>
 
               {/* 开发者 */}
