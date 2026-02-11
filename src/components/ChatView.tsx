@@ -76,18 +76,33 @@ export function ChatView({
   const [editContent, setEditContent] = useState('');
   /** 消息过滤器状态：'all' 显示全部，'user' 仅显示用户消息，'assistant' 仅显示助手消息 */
   const [filter, setFilter] = useState<'all' | 'user' | 'assistant'>('all');
+  /** 搜索关键词：用于在消息文本中查找匹配内容，空字符串表示不搜索 */
+  const [searchQuery, setSearchQuery] = useState('');
   /** 消息列表底部的哨兵元素引用，用于自动滚动定位 */
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   /**
-   * 根据当前过滤器筛选消息列表。
-   * 首先排除非 user/assistant 类型的系统消息，然后根据 filter 状态进一步过滤。
+   * 根据当前过滤器和搜索关键词筛选消息列表。
+   * 筛选流程：
+   * 1. 排除非 user/assistant 类型的系统消息
+   * 2. 根据 filter 状态过滤角色
+   * 3. 如果有搜索关键词，进一步过滤包含关键词的消息（大小写不敏感）
    */
   const filteredMessages = messages.filter((msg) => {
     if (msg.type !== 'user' && msg.type !== 'assistant') return false;
-    if (filter === 'all') return true;
-    return msg.type === filter;
+    if (filter !== 'all' && msg.type !== filter) return false;
+    // 搜索关键词过滤：在消息文本中进行大小写不敏感的匹配
+    if (searchQuery.trim()) {
+      const text = getMessageText(msg).toLowerCase();
+      return text.includes(searchQuery.trim().toLowerCase());
+    }
+    return true;
   });
+
+  /** 过滤前的总消息数（仅 user/assistant 类型），用于显示 "N/M" 计数 */
+  const totalMessages = messages.filter(
+    (msg) => msg.type === 'user' || msg.type === 'assistant'
+  ).length;
 
   /**
    * 平滑滚动到消息列表底部。
@@ -177,10 +192,38 @@ export function ChatView({
             会话: {session.name || session.id.substring(0, 8)}
           </h2>
           <p className="text-sm text-muted-foreground">
-            {formatTimestamp(session.timestamp)} · {filteredMessages.length} 条消息
+            {formatTimestamp(session.timestamp)} ·{' '}
+            {searchQuery.trim() || filter !== 'all'
+              ? `显示 ${filteredMessages.length}/${totalMessages} 条消息`
+              : `${filteredMessages.length} 条消息`}
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {/* 搜索输入框 */}
+          <div className="relative">
+            <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="搜索消息..."
+              className="pl-8 pr-3 py-1.5 w-40 rounded-lg bg-secondary text-foreground border border-border focus:outline-none focus:ring-2 focus:ring-ring text-sm"
+            />
+            {/* 搜索内容不为空时显示清除按钮 */}
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            )}
+          </div>
+
           {/* 选择模式切换按钮 */}
           <button
             onClick={onToggleSelectionMode}
