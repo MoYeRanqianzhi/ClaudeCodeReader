@@ -4,7 +4,7 @@
  *              复制和多选批量操作等功能。是应用的核心内容区域，占据主界面的右侧大部分空间。
  */
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import type { SessionMessage, Session } from '../types/claude';
 import { getMessageText, formatTimestamp } from '../utils/claudeData';
 import { MessageBlockList } from './MessageBlockList';
@@ -108,6 +108,30 @@ export function ChatView({
   ).length;
 
   /**
+   * 计算当前会话的 Token 使用量汇总。
+   * 遍历所有消息的 usage 字段，累加输入/输出/缓存 Token 数。
+   * 使用 useMemo 缓存计算结果，仅在 messages 变化时重新计算。
+   */
+  const tokenStats = useMemo(() => {
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let cacheReadTokens = 0;
+    let cacheCreationTokens = 0;
+
+    for (const msg of messages) {
+      const usage = msg.message?.usage;
+      if (usage) {
+        inputTokens += usage.input_tokens || 0;
+        outputTokens += usage.output_tokens || 0;
+        cacheReadTokens += usage.cache_read_input_tokens || 0;
+        cacheCreationTokens += usage.cache_creation_input_tokens || 0;
+      }
+    }
+
+    return { inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens };
+  }, [messages]);
+
+  /**
    * 平滑滚动到消息列表底部。
    * 通过 scrollIntoView 将底部哨兵元素滚入可视区域。
    */
@@ -199,6 +223,14 @@ export function ChatView({
             {searchQuery.trim() || filter !== 'all'
               ? `显示 ${filteredMessages.length}/${totalMessages} 条消息`
               : `${filteredMessages.length} 条消息`}
+            {/* Token 使用量汇总：仅在有统计数据时显示 */}
+            {tokenStats.inputTokens + tokenStats.outputTokens > 0 && (
+              <span className="ml-2">
+                · 输入: {tokenStats.inputTokens.toLocaleString()} · 输出: {tokenStats.outputTokens.toLocaleString()}
+                {tokenStats.cacheReadTokens > 0 && ` · 缓存读取: ${tokenStats.cacheReadTokens.toLocaleString()}`}
+                {tokenStats.cacheCreationTokens > 0 && ` · 缓存创建: ${tokenStats.cacheCreationTokens.toLocaleString()}`}
+              </span>
+            )}
           </p>
         </div>
         <div className="flex items-center gap-2">
