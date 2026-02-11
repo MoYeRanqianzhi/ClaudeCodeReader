@@ -24,6 +24,7 @@ import {
   saveSettings,
   readSessionMessages,
   deleteMessage,
+  deleteMessages,
   editMessageContent,
   readEnvSwitcherConfig,
   saveEnvSwitcherConfig,
@@ -64,6 +65,10 @@ function App() {
   const [loading, setLoading] = useState(true);
   /** 全局错误信息：非 null 时显示全屏错误提示页面 */
   const [error, setError] = useState<string | null>(null);
+  /** 已选中的消息 UUID 集合：多选模式下用于追踪用户选择的消息 */
+  const [selectedMessages, setSelectedMessages] = useState<Set<string>>(new Set());
+  /** 选择模式开关：为 true 时显示复选框，允许批量操作 */
+  const [selectionMode, setSelectionMode] = useState(false);
 
   /**
    * 主题切换副作用
@@ -138,6 +143,9 @@ function App() {
    */
   const handleSelectSession = useCallback(async (session: Session) => {
     setCurrentSession(session);
+    // 切换会话时清空选择模式和已选消息，防止残留状态跨会话
+    setSelectedMessages(new Set());
+    setSelectionMode(false);
     try {
       const msgs = await readSessionMessages(session.filePath);
       setMessages(msgs);
@@ -212,6 +220,79 @@ function App() {
     },
     [currentSession]
   );
+
+  /**
+   * 切换单条消息的选中状态
+   *
+   * 在多选模式下，点击复选框或消息卡片时调用，
+   * 通过创建新 Set 触发 React 状态更新和重新渲染。
+   *
+   * @param uuid - 要切换选中状态的消息 UUID
+   */
+  const handleToggleSelect = useCallback((uuid: string) => {
+    setSelectedMessages(prev => {
+      const next = new Set(prev);
+      if (next.has(uuid)) {
+        next.delete(uuid);
+      } else {
+        next.add(uuid);
+      }
+      return next;
+    });
+  }, []);
+
+  /**
+   * 全选当前过滤后可见的消息
+   *
+   * 将传入的所有消息 UUID 添加到已选集合中。
+   * 此函数由 ChatView 调用，传入的是经过过滤后的消息列表。
+   *
+   * @param uuids - 要全选的消息 UUID 数组
+   */
+  const handleSelectAll = useCallback((uuids: string[]) => {
+    setSelectedMessages(new Set(uuids));
+  }, []);
+
+  /**
+   * 取消所有消息的选中状态
+   */
+  const handleDeselectAll = useCallback(() => {
+    setSelectedMessages(new Set());
+  }, []);
+
+  /**
+   * 批量删除所有已选中的消息
+   *
+   * 使用 deleteMessages 函数一次性从会话文件中移除所有选中的消息。
+   * 删除完成后自动退出选择模式并清空选中状态。
+   */
+  const handleDeleteSelected = useCallback(async () => {
+    if (!currentSession || selectedMessages.size === 0) return;
+    try {
+      const updatedMessages = await deleteMessages(currentSession.filePath, selectedMessages);
+      setMessages(updatedMessages);
+      // 删除完成后退出选择模式
+      setSelectedMessages(new Set());
+      setSelectionMode(false);
+    } catch (err) {
+      console.error('批量删除消息失败:', err);
+    }
+  }, [currentSession, selectedMessages]);
+
+  /**
+   * 切换选择模式的开启/关闭
+   *
+   * 关闭选择模式时自动清空已选择的消息，防止残留状态。
+   */
+  const handleToggleSelectionMode = useCallback(() => {
+    setSelectionMode(prev => {
+      if (prev) {
+        // 退出选择模式时清空选择状态
+        setSelectedMessages(new Set());
+      }
+      return !prev;
+    });
+  }, []);
 
   /**
    * 处理设置保存事件
@@ -434,6 +515,13 @@ function App() {
         onEditMessage={handleEditMessage}
         onDeleteMessage={handleDeleteMessage}
         onRefresh={handleRefresh}
+        selectionMode={selectionMode}
+        selectedMessages={selectedMessages}
+        onToggleSelect={handleToggleSelect}
+        onSelectAll={handleSelectAll}
+        onDeselectAll={handleDeselectAll}
+        onDeleteSelected={handleDeleteSelected}
+        onToggleSelectionMode={handleToggleSelectionMode}
       />
 
       {/*

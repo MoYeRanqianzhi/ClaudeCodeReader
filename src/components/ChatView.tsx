@@ -1,7 +1,7 @@
 /**
  * @file ChatView.tsx - 聊天视图组件
- * @description 负责展示单个会话的完整聊天记录，支持消息浏览、过滤、编辑、删除和复制等操作。
- *              是应用的核心内容区域，占据主界面的右侧大部分空间。
+ * @description 负责展示单个会话的完整聊天记录，支持消息浏览、过滤、编辑、删除、
+ *              复制和多选批量操作等功能。是应用的核心内容区域，占据主界面的右侧大部分空间。
  */
 
 import { useState, useRef, useEffect } from 'react';
@@ -23,6 +23,20 @@ interface ChatViewProps {
   onDeleteMessage: (uuid: string) => void;
   /** 刷新当前会话数据的回调函数 */
   onRefresh: () => void;
+  /** 多选模式是否开启 */
+  selectionMode: boolean;
+  /** 当前已选中的消息 UUID 集合 */
+  selectedMessages: Set<string>;
+  /** 切换单条消息选中状态的回调 */
+  onToggleSelect: (uuid: string) => void;
+  /** 全选可见消息的回调，接收当前过滤后所有消息的 UUID 数组 */
+  onSelectAll: (uuids: string[]) => void;
+  /** 取消所有选中的回调 */
+  onDeselectAll: () => void;
+  /** 批量删除已选消息的回调 */
+  onDeleteSelected: () => void;
+  /** 切换选择模式开关的回调 */
+  onToggleSelectionMode: () => void;
 }
 
 /**
@@ -33,6 +47,7 @@ interface ChatViewProps {
  * - 内联编辑消息内容
  * - 一键复制消息文本到剪贴板
  * - 删除单条消息
+ * - 多选模式：复选框选择、全选/取消全选、批量删除
  * - 自动滚动到最新消息
  * - 显示每条消息的 Token 使用量和模型信息
  *
@@ -47,6 +62,13 @@ export function ChatView({
   onEditMessage,
   onDeleteMessage,
   onRefresh,
+  selectionMode,
+  selectedMessages,
+  onToggleSelect,
+  onSelectAll,
+  onDeselectAll,
+  onDeleteSelected,
+  onToggleSelectionMode,
 }: ChatViewProps) {
   /** 当前正在编辑的消息 UUID，为 null 表示没有消息处于编辑状态 */
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -148,7 +170,7 @@ export function ChatView({
 
   return (
     <div className="flex-1 flex flex-col bg-background">
-      {/* 头部工具栏：显示会话标题、消息计数、过滤器、刷新和滚动按钮 */}
+      {/* 头部工具栏：显示会话标题、消息计数、过滤器、多选操作、刷新和滚动按钮 */}
       <div className="p-4 border-b border-border flex items-center justify-between bg-card">
         <div>
           <h2 className="text-lg font-semibold text-foreground">
@@ -159,6 +181,51 @@ export function ChatView({
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {/* 选择模式切换按钮 */}
+          <button
+            onClick={onToggleSelectionMode}
+            className={`p-2 rounded-lg transition-colors ${
+              selectionMode ? 'bg-primary text-primary-foreground' : 'hover:bg-accent'
+            }`}
+            title={selectionMode ? '退出选择模式' : '进入选择模式'}
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+            </svg>
+          </button>
+
+          {/* 选择模式下的操作按钮组 */}
+          {selectionMode && (
+            <>
+              {/* 全选按钮 */}
+              <button
+                onClick={() => onSelectAll(filteredMessages.map(m => m.uuid))}
+                className="px-3 py-1.5 rounded-lg bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors text-sm"
+              >
+                全选
+              </button>
+              {/* 取消全选按钮 */}
+              <button
+                onClick={onDeselectAll}
+                className="px-3 py-1.5 rounded-lg bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors text-sm"
+              >
+                取消
+              </button>
+              {/* 批量删除按钮：显示已选数量，无选中时禁用 */}
+              <button
+                onClick={onDeleteSelected}
+                disabled={selectedMessages.size === 0}
+                className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${
+                  selectedMessages.size > 0
+                    ? 'bg-destructive text-destructive-foreground hover:bg-destructive/90'
+                    : 'bg-secondary text-muted-foreground cursor-not-allowed'
+                }`}
+              >
+                删除 ({selectedMessages.size})
+              </button>
+            </>
+          )}
+
           {/* 消息角色过滤器：下拉选择框，支持全部/仅用户/仅助手 */}
           <select
             value={filter}
@@ -209,11 +276,25 @@ export function ChatView({
               key={msg.uuid}
               className={`rounded-lg p-4 ${
                 msg.type === 'user' ? 'message-user' : 'message-assistant'
-              }`}
+              } ${selectionMode && selectedMessages.has(msg.uuid) ? 'ring-2 ring-primary' : ''}`}
+              onClick={selectionMode ? () => onToggleSelect(msg.uuid) : undefined}
+              style={selectionMode ? { cursor: 'pointer' } : undefined}
             >
-              {/* 消息头部：显示角色标签、时间戳、模型信息和操作按钮（复制/编辑/删除） */}
+              {/* 消息头部：显示复选框（选择模式）、角色标签、时间戳、模型信息和操作按钮 */}
               <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-2">
+                  {/* 选择模式下显示复选框 */}
+                  {selectionMode && (
+                    <input
+                      type="checkbox"
+                      checked={selectedMessages.has(msg.uuid)}
+                      onChange={(e) => {
+                        e.stopPropagation();
+                        onToggleSelect(msg.uuid);
+                      }}
+                      className="w-4 h-4 rounded border-border accent-primary"
+                    />
+                  )}
                   <span
                     className={`px-2 py-0.5 rounded text-xs font-medium ${
                       msg.type === 'user'
@@ -232,50 +313,53 @@ export function ChatView({
                     </span>
                   )}
                 </div>
-                <div className="flex items-center gap-1">
-                  <button
-                    onClick={() => copyToClipboard(getMessageText(msg))}
-                    className="p-1.5 rounded hover:bg-accent transition-colors"
-                    title="复制"
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
-                      />
-                    </svg>
-                  </button>
-                  <button
-                    onClick={() => handleStartEdit(msg)}
-                    className="p-1.5 rounded hover:bg-accent transition-colors"
-                    title="编辑"
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-                      />
-                    </svg>
-                  </button>
-                  <button
-                    onClick={() => onDeleteMessage(msg.uuid)}
-                    className="p-1.5 rounded hover:bg-destructive/10 text-destructive transition-colors"
-                    title="删除"
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                      />
-                    </svg>
-                  </button>
-                </div>
+                {/* 非选择模式下显示操作按钮 */}
+                {!selectionMode && (
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => copyToClipboard(getMessageText(msg))}
+                      className="p-1.5 rounded hover:bg-accent transition-colors"
+                      title="复制"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
+                        />
+                      </svg>
+                    </button>
+                    <button
+                      onClick={() => handleStartEdit(msg)}
+                      className="p-1.5 rounded hover:bg-accent transition-colors"
+                      title="编辑"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                        />
+                      </svg>
+                    </button>
+                    <button
+                      onClick={() => onDeleteMessage(msg.uuid)}
+                      className="p-1.5 rounded hover:bg-destructive/10 text-destructive transition-colors"
+                      title="删除"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                        />
+                      </svg>
+                    </button>
+                  </div>
+                )}
               </div>
 
               {/* 消息内容：根据是否处于编辑模式显示不同的 UI */}
