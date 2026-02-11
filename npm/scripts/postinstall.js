@@ -27,7 +27,7 @@ const __dirname = dirname(__filename);
    - GITHUB_REPO: GitHub 仓库路径，用于拼接下载 URL
    - BASE_URL:    GitHub Releases 下载的基础 URL 前缀
    -------------------------------------------------------------------------- */
-const VERSION = '0.1.0-beta.4';
+const VERSION = '0.2.0-beta.1';
 const GITHUB_REPO = 'MoYeRanQianZhi/ClaudeCodeReader';
 const BASE_URL = `https://github.com/${GITHUB_REPO}/releases/download/v${VERSION}`;
 
