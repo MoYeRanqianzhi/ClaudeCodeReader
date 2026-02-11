@@ -26,6 +26,7 @@ import {
   deleteMessage,
   deleteMessages,
   editMessageContent,
+  deleteSession,
   readEnvSwitcherConfig,
   saveEnvSwitcherConfig,
   applyEnvProfile,
@@ -295,6 +296,35 @@ function App() {
   }, []);
 
   /**
+   * 处理删除会话事件
+   *
+   * 从文件系统中删除会话的 JSONL 文件，然后刷新项目列表以反映变化。
+   * 如果被删除的会话正是当前选中的会话，清除相关状态。
+   *
+   * @param sessionFilePath - 要删除的会话文件路径
+   */
+  const handleDeleteSession = useCallback(
+    async (sessionFilePath: string) => {
+      try {
+        await deleteSession(sessionFilePath);
+        // 如果删除的是当前正在查看的会话，清除选中状态和消息
+        if (currentSession?.filePath === sessionFilePath) {
+          setCurrentSession(null);
+          setMessages([]);
+          setSelectedMessages(new Set());
+          setSelectionMode(false);
+        }
+        // 重新加载项目列表以刷新侧边栏
+        const updatedProjects = await getProjects(claudeDataPath);
+        setProjects(updatedProjects);
+      } catch (err) {
+        console.error('删除会话失败:', err);
+      }
+    },
+    [claudeDataPath, currentSession]
+  );
+
+  /**
    * 处理设置保存事件
    *
    * 将更新后的设置对象保存到 ~/.claude/settings.json 文件，并更新本地状态。
@@ -501,6 +531,7 @@ function App() {
         envConfig={envConfig}
         onSelectProject={setCurrentProject}
         onSelectSession={handleSelectSession}
+        onDeleteSession={handleDeleteSession}
         onOpenSettings={() => setShowSettings(true)}
         onSwitchEnvProfile={handleSwitchEnvProfile}
         onSaveEnvProfile={handleSaveEnvProfile}

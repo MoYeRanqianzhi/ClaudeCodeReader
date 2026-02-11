@@ -550,6 +550,19 @@ export async function editMessageContent(
 // ============ 格式化工具 ============
 
 /**
+ * 删除指定的会话文件
+ *
+ * 从文件系统中永久移除会话的 JSONL 文件。此操作不可撤销。
+ * 使用 @tauri-apps/plugin-fs 的 remove 函数实现跨平台文件删除。
+ *
+ * @param sessionFilePath - 要删除的会话 JSONL 文件的绝对路径
+ */
+export async function deleteSession(sessionFilePath: string): Promise<void> {
+  const { remove } = await import('@tauri-apps/plugin-fs');
+  await remove(sessionFilePath);
+}
+
+/**
  * 提取消息的纯文本内容
  *
  * 从 SessionMessage 中提取可显示的文本内容，处理两种 content 格式：

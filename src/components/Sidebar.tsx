@@ -25,6 +25,8 @@ interface SidebarProps {
   onSelectProject: (project: Project) => void;
   /** 选中会话时触发的回调 */
   onSelectSession: (session: Session) => void;
+  /** 删除会话时触发的回调，接收会话文件路径 */
+  onDeleteSession: (sessionFilePath: string) => void;
   /** 打开设置面板的回调 */
   onOpenSettings: () => void;
   /** 切换环境配置时触发的回调 */
@@ -56,6 +58,7 @@ export function Sidebar({
   envConfig,
   onSelectProject,
   onSelectSession,
+  onDeleteSession,
   onOpenSettings,
   onSwitchEnvProfile,
   onSaveEnvProfile,
@@ -187,20 +190,33 @@ export function Sidebar({
               {expandedProjects.has(project.path) && (
                 <div className="bg-muted/30">
                   {project.sessions.map((session) => (
-                    <button
+                    <div
                       key={session.id}
-                      onClick={() => onSelectSession(session)}
-                      className={`w-full p-3 pl-8 text-left hover:bg-accent transition-colors ${
+                      className={`group relative w-full p-3 pl-8 text-left hover:bg-accent transition-colors cursor-pointer ${
                         currentSession?.id === session.id ? 'bg-accent' : ''
                       }`}
+                      onClick={() => onSelectSession(session)}
                     >
-                      <div className="text-sm text-foreground truncate">
+                      <div className="text-sm text-foreground truncate pr-6">
                         {session.name || session.id.substring(0, 8)}
                       </div>
                       <div className="text-xs text-muted-foreground">
                         {formatTimestamp(session.timestamp)}
                       </div>
-                    </button>
+                      {/* 删除按钮：hover 时显示，阻止事件冒泡防止触发会话选择 */}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onDeleteSession(session.filePath);
+                        }}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-destructive/10 text-destructive transition-all"
+                        title="删除会话"
+                      >
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                      </button>
+                    </div>
                   ))}
                 </div>
               )}
