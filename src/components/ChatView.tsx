@@ -39,6 +39,10 @@ interface ChatViewProps {
   onDeleteSelected: () => void;
   /** 切换选择模式开关的回调 */
   onToggleSelectionMode: () => void;
+  /** 侧边栏是否处于折叠状态 */
+  sidebarCollapsed: boolean;
+  /** 展开侧边栏的回调 */
+  onExpandSidebar: () => void;
 }
 
 /**
@@ -72,6 +76,8 @@ export function ChatView({
   onDeselectAll,
   onDeleteSelected,
   onToggleSelectionMode,
+  sidebarCollapsed,
+  onExpandSidebar,
 }: ChatViewProps) {
   /** 当前正在编辑的消息 UUID，为 null 表示没有消息处于编辑状态 */
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -214,7 +220,20 @@ export function ChatView({
     <div className="flex-1 flex flex-col bg-background">
       {/* 头部工具栏：显示会话标题、消息计数、过滤器、多选操作、刷新和滚动按钮 */}
       <div className="p-4 border-b border-border flex items-center justify-between bg-card">
-        <div>
+        <div className="flex items-center gap-3">
+          {/* 侧边栏折叠时显示展开按钮 */}
+          {sidebarCollapsed && (
+            <button
+              onClick={onExpandSidebar}
+              className="p-2 rounded-lg hover:bg-accent transition-colors"
+              title="展开侧边栏"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" />
+              </svg>
+            </button>
+          )}
+          <div>
           <h2 className="text-lg font-semibold text-foreground">
             会话: {session.name || session.id.substring(0, 8)}
           </h2>
@@ -232,6 +251,7 @@ export function ChatView({
               </span>
             )}
           </p>
+          </div>
         </div>
         <div className="flex items-center gap-2">
           {/* 搜索输入框 */}

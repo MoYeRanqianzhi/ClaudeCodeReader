@@ -72,6 +72,8 @@ function App() {
   const [selectedMessages, setSelectedMessages] = useState<Set<string>>(new Set());
   /** 选择模式开关：为 true 时显示复选框，允许批量操作 */
   const [selectionMode, setSelectionMode] = useState(false);
+  /** 侧边栏折叠状态：为 true 时隐藏侧边栏，释放主内容区空间 */
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   /**
    * 主题切换副作用
@@ -569,21 +571,24 @@ function App() {
   // ============ 正常渲染：主应用界面 ============
   return (
     <div className="h-screen flex bg-background">
-      {/* 左侧边栏：项目导航、会话列表、环境配置切换 */}
-      <Sidebar
-        projects={projects}
-        currentProject={currentProject}
-        currentSession={currentSession}
-        envConfig={envConfig}
-        onSelectProject={setCurrentProject}
-        onSelectSession={handleSelectSession}
-        onDeleteSession={handleDeleteSession}
-        onOpenSettings={() => setShowSettings(true)}
-        onSwitchEnvProfile={handleSwitchEnvProfile}
-        onSaveEnvProfile={handleSaveEnvProfile}
-        onDeleteEnvProfile={handleDeleteEnvProfile}
-        onEditEnvProfile={handleEditEnvProfile}
-      />
+      {/* 左侧边栏：项目导航、会话列表、环境配置切换（折叠时隐藏） */}
+      {!sidebarCollapsed && (
+        <Sidebar
+          projects={projects}
+          currentProject={currentProject}
+          currentSession={currentSession}
+          envConfig={envConfig}
+          onSelectProject={setCurrentProject}
+          onSelectSession={handleSelectSession}
+          onDeleteSession={handleDeleteSession}
+          onOpenSettings={() => setShowSettings(true)}
+          onSwitchEnvProfile={handleSwitchEnvProfile}
+          onSaveEnvProfile={handleSaveEnvProfile}
+          onDeleteEnvProfile={handleDeleteEnvProfile}
+          onEditEnvProfile={handleEditEnvProfile}
+          onCollapse={() => setSidebarCollapsed(true)}
+        />
+      )}
 
       {/* 主内容区：聊天消息展示和操作 */}
       <ChatView
@@ -600,6 +605,8 @@ function App() {
         onDeselectAll={handleDeselectAll}
         onDeleteSelected={handleDeleteSelected}
         onToggleSelectionMode={handleToggleSelectionMode}
+        sidebarCollapsed={sidebarCollapsed}
+        onExpandSidebar={() => setSidebarCollapsed(false)}
       />
 
       {/*
