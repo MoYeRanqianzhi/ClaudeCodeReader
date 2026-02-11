@@ -1,48 +1,70 @@
+/* ==========================================================================
+   Tailwind CSS 框架导入
+   引入 Tailwind CSS 4 的核心功能，包括基础样式重置（preflight）、
+   工具类生成以及主题系统。所有后续的 @theme 变量都将集成到
+   Tailwind 的类名体系中。
+   ========================================================================== */
 @import "tailwindcss";
 
+/* ==========================================================================
+   浅色主题变量（默认主题）
+   基于 shadcn/ui 设计系统，使用 HSL 色彩空间定义语义化颜色。
+   这些变量通过 @theme 指令注册到 Tailwind CSS 4 的主题系统中，
+   可以在 Tailwind 类名中直接引用（如 bg-background, text-foreground）。
+   ========================================================================== */
 @theme {
-  --color-border: hsl(240 5.9% 90%);
-  --color-input: hsl(240 5.9% 90%);
-  --color-ring: hsl(240 5.9% 10%);
-  --color-background: hsl(0 0% 100%);
-  --color-foreground: hsl(240 10% 3.9%);
-  --color-primary: hsl(240 5.9% 10%);
-  --color-primary-foreground: hsl(0 0% 98%);
-  --color-secondary: hsl(240 4.8% 95.9%);
-  --color-secondary-foreground: hsl(240 5.9% 10%);
-  --color-destructive: hsl(0 84.2% 60.2%);
-  --color-destructive-foreground: hsl(0 0% 98%);
-  --color-muted: hsl(240 4.8% 95.9%);
-  --color-muted-foreground: hsl(240 3.8% 46.1%);
-  --color-accent: hsl(240 4.8% 95.9%);
-  --color-accent-foreground: hsl(240 5.9% 10%);
-  --color-card: hsl(0 0% 100%);
-  --color-card-foreground: hsl(240 10% 3.9%);
-  --radius-lg: 0.5rem;
-  --radius-md: 0.375rem;
-  --radius-sm: 0.25rem;
+  --color-border: hsl(240 5.9% 90%);              /* 边框颜色 — 用于分隔线、卡片边框等通用边框 */
+  --color-input: hsl(240 5.9% 90%);               /* 输入框边框颜色 — 文本框、选择框等表单控件的边框 */
+  --color-ring: hsl(240 5.9% 10%);                /* 焦点环颜色 — 键盘导航时元素获得焦点的外圈高亮 */
+  --color-background: hsl(0 0% 100%);             /* 页面背景色 — 整个应用的底层背景（纯白） */
+  --color-foreground: hsl(240 10% 3.9%);          /* 主文字颜色 — 正文、标题等主要文本内容 */
+  --color-primary: hsl(240 5.9% 10%);             /* 主要操作按钮背景色 — 同时用于用户消息标签的背景 */
+  --color-primary-foreground: hsl(0 0% 98%);      /* 主要操作按钮文字色 — 与 primary 背景形成高对比度 */
+  --color-secondary: hsl(240 4.8% 95.9%);         /* 次要元素背景色 — 标签、徽章等辅助 UI 元素 */
+  --color-secondary-foreground: hsl(240 5.9% 10%); /* 次要元素文字色 — 在 secondary 背景上的文本 */
+  --color-destructive: hsl(0 84.2% 60.2%);        /* 危险操作背景色 — 删除按钮、错误提示等破坏性操作 */
+  --color-destructive-foreground: hsl(0 0% 98%);  /* 危险操作文字色 — 在 destructive 背景上的文本 */
+  --color-muted: hsl(240 4.8% 95.9%);             /* 弱化区域背景色 — 侧边栏、禁用状态等低优先级区域 */
+  --color-muted-foreground: hsl(240 3.8% 46.1%);  /* 辅助文字颜色 — 时间戳、占位符等次要文本 */
+  --color-accent: hsl(240 4.8% 95.9%);            /* 悬停高亮背景色 — 列表项悬停态、助手消息边框 */
+  --color-accent-foreground: hsl(240 5.9% 10%);   /* 悬停高亮文字色 — 在 accent 背景上的文本 */
+  --color-card: hsl(0 0% 100%);                   /* 卡片容器背景色 — 对话卡片、设置面板等浮层 */
+  --color-card-foreground: hsl(240 10% 3.9%);     /* 卡片容器文字色 — 卡片内的文本内容 */
+  --radius-lg: 0.5rem;                            /* 大圆角 — 卡片、模态框等大型容器 */
+  --radius-md: 0.375rem;                          /* 中圆角 — 按钮、输入框等中型元素 */
+  --radius-sm: 0.25rem;                           /* 小圆角 — 标签、徽章等小型元素 */
 }
 
+/* ==========================================================================
+   深色主题变量
+   通过 document.documentElement.classList.toggle('dark') 切换。
+   所有颜色使用更深的底色和更浅的前景色以减少眼部疲劳。
+   ========================================================================== */
 .dark {
-  --color-border: hsl(240 3.7% 15.9%);
-  --color-input: hsl(240 3.7% 15.9%);
-  --color-ring: hsl(240 4.9% 83.9%);
-  --color-background: hsl(240 10% 3.9%);
-  --color-foreground: hsl(0 0% 98%);
-  --color-primary: hsl(0 0% 98%);
-  --color-primary-foreground: hsl(240 5.9% 10%);
-  --color-secondary: hsl(240 3.7% 15.9%);
-  --color-secondary-foreground: hsl(0 0% 98%);
-  --color-destructive: hsl(0 62.8% 30.6%);
-  --color-destructive-foreground: hsl(0 0% 98%);
-  --color-muted: hsl(240 3.7% 15.9%);
-  --color-muted-foreground: hsl(240 5% 64.9%);
-  --color-accent: hsl(240 3.7% 15.9%);
-  --color-accent-foreground: hsl(0 0% 98%);
-  --color-card: hsl(240 10% 3.9%);
-  --color-card-foreground: hsl(0 0% 98%);
+  --color-border: hsl(240 3.7% 15.9%);            /* 边框颜色 — 深色模式下使用更暗的分隔线 */
+  --color-input: hsl(240 3.7% 15.9%);             /* 输入框边框颜色 — 与深色背景融合的表单边框 */
+  --color-ring: hsl(240 4.9% 83.9%);              /* 焦点环颜色 — 深色背景上的明亮焦点指示 */
+  --color-background: hsl(240 10% 3.9%);          /* 页面背景色 — 接近纯黑的深色底色 */
+  --color-foreground: hsl(0 0% 98%);              /* 主文字颜色 — 接近纯白的文本以确保可读性 */
+  --color-primary: hsl(0 0% 98%);                 /* 主要操作按钮背景色 — 深色模式下反转为浅色 */
+  --color-primary-foreground: hsl(240 5.9% 10%);  /* 主要操作按钮文字色 — 深色文字配合浅色按钮 */
+  --color-secondary: hsl(240 3.7% 15.9%);         /* 次要元素背景色 */
+  --color-secondary-foreground: hsl(0 0% 98%);    /* 次要元素文字色 */
+  --color-destructive: hsl(0 62.8% 30.6%);        /* 危险操作背景色 — 降低饱和度以适应深色环境 */
+  --color-destructive-foreground: hsl(0 0% 98%);  /* 危险操作文字色 */
+  --color-muted: hsl(240 3.7% 15.9%);             /* 弱化区域背景色 */
+  --color-muted-foreground: hsl(240 5% 64.9%);    /* 辅助文字颜色 — 比浅色模式更亮以保持可读性 */
+  --color-accent: hsl(240 3.7% 15.9%);            /* 悬停高亮背景色 */
+  --color-accent-foreground: hsl(0 0% 98%);       /* 悬停高亮文字色 */
+  --color-card: hsl(240 10% 3.9%);                /* 卡片容器背景色 — 与页面背景同色，通过边框区分层级 */
+  --color-card-foreground: hsl(0 0% 98%);         /* 卡片容器文字色 */
 }
 
+/* ==========================================================================
+   全局基础样式重置
+   确保所有元素使用 border-box 盒模型，并将根容器撑满视口。
+   overflow: hidden 防止出现全局滚动条，滚动交由各子区域自行处理。
+   ========================================================================== */
 * {
   border-color: var(--color-border);
   box-sizing: border-box;
@@ -61,6 +83,12 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
 }
 
+/* ==========================================================================
+   滚动条自定义样式（WebKit 浏览器）
+   Tauri 使用 WebView 渲染界面，在 macOS/Windows 上均基于 WebKit/Chromium，
+   因此 ::-webkit-scrollbar 伪元素可以生效。
+   窄滚动条（8px）配合圆角设计，与整体 UI 风格保持一致。
+   ========================================================================== */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -80,6 +108,12 @@ body {
   opacity: 0.5;
 }
 
+/* ==========================================================================
+   消息类型样式
+   聊天记录中用户消息和助手消息采用不同的视觉样式加以区分。
+   - .message-user:    左侧使用 primary 色条，背景为半透明 primary 底色
+   - .message-assistant: 左侧使用 accent 色条，背景为 muted 柔和灰色
+   ========================================================================== */
 .message-user {
   background: color-mix(in srgb, var(--color-primary) 10%, transparent);
   border-left: 4px solid var(--color-primary);
@@ -90,6 +124,11 @@ body {
   border-left: 4px solid var(--color-accent);
 }
 
+/* ==========================================================================
+   代码块样式
+   对话中代码片段的容器样式。使用等宽字体、secondary 背景色和圆角，
+   并允许水平滚动以防止长代码行溢出容器。
+   ========================================================================== */
 .code-block {
   background: var(--color-secondary);
   border-radius: 0.5rem;
@@ -99,7 +138,13 @@ body {
   font-size: 0.875rem;
 }
 
-/* 确保flex布局正常工作 */
+/* ==========================================================================
+   Tailwind CSS 工具类手动覆盖
+   在某些构建场景下，Tailwind CSS 4 的 JIT（即时编译）引擎可能未能
+   正确扫描到模板中使用的动态类名（例如通过变量拼接生成的类名），
+   导致对应的工具类不会被生成。这里手动定义核心布局类作为后备方案，
+   确保 flex 弹性布局、全屏高度和溢出控制等关键样式始终可用。
+   ========================================================================== */
 .flex { display: flex; }
 .flex-1 { flex: 1 1 0%; }
 .flex-col { flex-direction: column; }

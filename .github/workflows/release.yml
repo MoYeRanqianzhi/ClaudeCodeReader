@@ -1,48 +1,78 @@
+# =============================================================================
+# ClaudeCodeReader 多平台构建与发布工作流
+#
+# 用途：当推送匹配 'v*' 模式的 Git 标签时（如 v0.1.0、v1.0.0-beta.1），
+# 自动执行以下流水线：
+#   1. 创建 GitHub Release（支持正式版和预发布版）
+#   2. 在 4 个平台/架构上并行构建 Tauri 桌面应用
+#   3. 将构建产物上传到 GitHub Release
+#   4. 发布 NPM 包（供 `npm install -g claude-code-reader` 安装）
+# =============================================================================
+
 name: Build and Release
 
+# 触发条件：仅在推送以 'v' 开头的标签时触发（如 v0.1.0、v1.0.0-beta.1）
+# 普通的代码提交和 PR 不会触发此工作流
 on:
   push:
     tags:
       - 'v*'
 
 jobs:
+  # ===========================================================================
+  # Job 1: 创建 GitHub Release
+  # 在构建开始前先创建一个 Release 占位，后续构建任务会将产物上传到此 Release。
+  # ===========================================================================
   create-release:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write    # 需要写权限才能创建 Release 和上传资产
     outputs:
-      release_id: ${{ steps.create_release.outputs.id }}
+      release_id: ${{ steps.create_release.outputs.id }}    # 将 Release ID 传递给下游 Job
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          fetch-depth: 0
+          fetch-depth: 0    # 拉取完整历史，以便自动生成 Release Notes
 
       - name: Create Release
         id: create_release
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
+          generate_release_notes: true    # 根据 commit 历史自动生成变更说明
           draft: false
+          # 预发布判断：如果标签名包含 'beta' 或 'alpha'（如 v1.0.0-beta.1），
+          # 则将此 Release 标记为预发布版本，不会显示为最新正式版
           prerelease: ${{ contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') }}
 
+  # ===========================================================================
+  # Job 2: 在多个平台上并行构建 Tauri 桌面应用
+  # 依赖 create-release Job，需要 Release ID 来上传构建产物。
+  # 构建完成后将 .msi/.exe/.dmg/.deb/.AppImage 等安装包上传到 GitHub Release。
+  # ===========================================================================
   build-tauri:
-    needs: create-release
+    needs: create-release    # 等待 Release 创建完成后再开始构建
     permissions:
-      contents: write
+      contents: write        # 需要写权限来上传构建产物到 Release
     strategy:
+      # fail-fast: false — 即使某个平台构建失败，其他平台仍继续构建。
+      # 这样可以最大化成功产物数量，避免因单平台问题阻塞所有发布。
       fail-fast: false
       matrix:
         include:
+          # ---- macOS ARM64 (Apple Silicon: M1/M2/M3/M4) ----
           - platform: 'macos-latest'
             args: '--target aarch64-apple-darwin'
             target: 'aarch64-apple-darwin'
+          # ---- macOS x86_64 (Intel Mac) ----
           - platform: 'macos-latest'
             args: '--target x86_64-apple-darwin'
             target: 'x86_64-apple-darwin'
+          # ---- Linux x86_64 (Ubuntu 22.04) ----
           - platform: 'ubuntu-22.04'
             args: ''
             target: ''
+          # ---- Windows x86_64 (使用 NSIS 安装器格式) ----
           - platform: 'windows-latest'
             args: '--bundles nsis'
             target: ''
@@ -60,8 +90,13 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: ${{ matrix.target }}    # 安装交叉编译目标（macOS 需要）
 
+      # Ubuntu 构建依赖：
+      # - libwebkit2gtk-4.1-dev: Tauri 的 WebView 渲染引擎（Linux 上使用 WebKitGTK）
+      # - libappindicator3-dev:  系统托盘图标支持
+      # - librsvg2-dev:          SVG 图标渲染（应用图标处理）
+      # - patchelf:              修改 ELF 二进制文件的动态链接路径
       - name: Install dependencies (Ubuntu only)
         if: matrix.platform == 'ubuntu-22.04'
         run: |
@@ -71,6 +106,7 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      # Tauri 官方 GitHub Action：构建应用并自动上传 .msi/.dmg/.deb/.AppImage 等到 Release
       - name: Build Tauri
         uses: tauri-apps/tauri-action@v0
         env:
@@ -79,9 +115,13 @@ jobs:
           releaseId: ${{ needs.create-release.outputs.release_id }}
           args: ${{ matrix.args }}
 
+      # ---- Windows 额外步骤：上传独立 .exe 二进制文件 ----
+      # 除了 NSIS 安装器外，额外上传一份独立的 .exe 文件，
+      # 供 NPM postinstall 脚本直接下载使用（无需安装）
       - name: Upload Windows binary
         if: matrix.platform == 'windows-latest'
         run: |
+          # 从 Git 标签提取版本号：v0.1.0 → 0.1.0（去掉前缀 'v'）
           VERSION=${GITHUB_REF_NAME#v}
           cp src-tauri/target/release/claude-code-reader.exe "ClaudeCodeReader_${VERSION}_x64.exe"
         shell: bash
@@ -91,9 +131,13 @@ jobs:
         with:
           files: ClaudeCodeReader_*_x64.exe
 
+      # ---- macOS 额外步骤：打包 .app 为 tar.gz 并上传 ----
+      # macOS 的 .app 是一个目录结构（应用束），需要打包为 tar.gz 才能作为单文件分发。
+      # NPM postinstall 脚本会下载此 tar.gz 并在本地解压。
       - name: Upload macOS binary
         if: matrix.platform == 'macos-latest'
         run: |
+          # 从 Git 标签提取版本号：v0.1.0 → 0.1.0
           VERSION=${GITHUB_REF_NAME#v}
           cd src-tauri/target/${{ matrix.target }}/release/bundle/macos
           tar -czvf ClaudeCodeReader_${VERSION}_${{ matrix.target }}.app.tar.gz ClaudeCodeReader.app
@@ -103,8 +147,14 @@ jobs:
         with:
           files: src-tauri/target/${{ matrix.target }}/release/bundle/macos/ClaudeCodeReader_*_${{ matrix.target }}.app.tar.gz
 
+  # ===========================================================================
+  # Job 3: 发布 NPM 包
+  # 在所有平台构建完成后，将 npm/ 目录作为独立包发布到 NPM Registry。
+  # 用户通过 `npm install -g claude-code-reader` 安装后，
+  # postinstall 脚本会自动从 GitHub Releases 下载对应平台的二进制文件。
+  # ===========================================================================
   publish-npm:
-    needs: build-tauri
+    needs: build-tauri    # 等待所有平台构建完成，确保 Release 资产已就绪
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -114,24 +164,35 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: '24'
-          registry-url: 'https://registry.npmjs.org'
+          registry-url: 'https://registry.npmjs.org'    # 配置 NPM Registry 地址
 
+      # 从 Git 标签同步版本号到 package.json
+      # 例如标签 v0.1.0-beta.4 → npm version 0.1.0-beta.4
       - name: Update version from release tag
         working-directory: npm
         run: |
+          # 从 Git 标签提取版本号：v0.1.0 → 0.1.0
           VERSION=${GITHUB_REF_NAME#v}
           npm version $VERSION --no-git-tag-version --allow-same-version
 
+      # 使用 sed 命令替换 postinstall.js 中硬编码的 VERSION 常量值，
+      # 确保安装后脚本下载的是与当前发布版本匹配的二进制文件
       - name: Update postinstall script version
         working-directory: npm
         run: |
           VERSION=${GITHUB_REF_NAME#v}
           sed -i "s/const VERSION = '.*'/const VERSION = '$VERSION'/" scripts/postinstall.js
 
+      # 修复 package.json 中可能存在的格式问题（如缺少必要字段）
       - name: Fix package.json
         working-directory: npm
         run: npm pkg fix
 
+      # 发布到 NPM Registry
+      # - 如果版本号包含 'beta' 或 'alpha'，使用 --tag beta 发布，
+      #   这样 `npm install claude-code-reader` 不会安装到预发布版本，
+      #   用户需要显式指定 `npm install claude-code-reader@beta` 才能安装
+      # - 正式版本则发布到默认的 'latest' 标签
       - name: Publish to NPM
         working-directory: npm
         run: |
@@ -142,4 +203,4 @@ jobs:
             npm publish --access public
           fi
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}    # NPM 发布凭证（在仓库 Secrets 中配置）

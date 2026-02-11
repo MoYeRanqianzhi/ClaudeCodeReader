@@ -1,22 +1,54 @@
+/**
+ * @file Sidebar.tsx - 侧边栏导航组件
+ * @description 应用左侧的主导航面板，负责项目与会话的层级浏览、搜索过滤、
+ *              环境配置切换以及设置入口。采用可折叠的树形结构展示项目和会话。
+ */
+
 import { useState } from 'react';
 import type { Project, Session, EnvProfile, EnvSwitcherConfig } from '../types/claude';
 import { formatTimestamp } from '../utils/claudeData';
 import { EnvSwitcher } from './EnvSwitcher';
 
+/**
+ * Sidebar 组件的属性接口
+ */
 interface SidebarProps {
+  /** 所有已发现的项目列表，每个项目包含路径和关联的会话 */
   projects: Project[];
+  /** 当前选中的项目对象，用于高亮显示 */
   currentProject: Project | null;
+  /** 当前选中的会话对象，用于高亮显示 */
   currentSession: Session | null;
+  /** 环境配置切换器所需的配置数据（包含配置列表和当前激活的配置 ID） */
   envConfig: EnvSwitcherConfig;
+  /** 选中项目时触发的回调 */
   onSelectProject: (project: Project) => void;
+  /** 选中会话时触发的回调 */
   onSelectSession: (session: Session) => void;
+  /** 打开设置面板的回调 */
   onOpenSettings: () => void;
+  /** 切换环境配置时触发的回调 */
   onSwitchEnvProfile: (profile: EnvProfile) => void;
+  /** 将当前环境保存为新配置时触发的回调，接收配置名称 */
   onSaveEnvProfile: (name: string) => void;
+  /** 删除环境配置时触发的回调，接收配置 ID */
   onDeleteEnvProfile: (profileId: string) => void;
+  /** 编辑环境配置时触发的回调，接收完整的配置对象 */
   onEditEnvProfile: (profile: EnvProfile) => void;
 }
 
+/**
+ * Sidebar - 侧边栏导航组件
+ *
+ * 提供项目和会话的层级导航功能，包含以下核心特性：
+ * - 项目树形结构：可展开/折叠的项目列表，每个项目下包含其关联的会话
+ * - 搜索过滤：支持按项目路径或会话 ID 进行模糊搜索
+ * - 环境配置切换：集成 EnvSwitcher 组件，可快速切换不同的环境配置
+ * - 底部统计：显示项目总数和会话总数
+ *
+ * @param props - 组件属性
+ * @returns JSX 元素
+ */
 export function Sidebar({
   projects,
   currentProject,
@@ -30,15 +62,27 @@ export function Sidebar({
   onDeleteEnvProfile,
   onEditEnvProfile,
 }: SidebarProps) {
+  /** 搜索关键词，用于过滤项目列表（同时匹配项目路径和会话 ID） */
   const [searchTerm, setSearchTerm] = useState('');
+  /** 已展开的项目路径集合，用于控制项目节点的展开/折叠状态 */
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
 
+  /**
+   * 根据搜索关键词过滤项目列表。
+   * 匹配规则：项目路径包含关键词，或者项目的任意会话 ID 包含关键词（不区分大小写）。
+   */
   const filteredProjects = projects.filter(
     (p) =>
       p.path.toLowerCase().includes(searchTerm.toLowerCase()) ||
       p.sessions.some((s) => s.id.toLowerCase().includes(searchTerm.toLowerCase()))
   );
 
+  /**
+   * 切换指定项目的展开/折叠状态。
+   * 使用 Set 数据结构管理展开状态，通过创建新 Set 触发 React 重新渲染。
+   *
+   * @param projectPath - 要切换展开状态的项目路径
+   */
   const toggleProject = (projectPath: string) => {
     const newExpanded = new Set(expandedProjects);
     if (newExpanded.has(projectPath)) {
@@ -51,7 +95,7 @@ export function Sidebar({
 
   return (
     <div className="w-72 h-full flex flex-col bg-card border-r border-border">
-      {/* 头部 */}
+      {/* 头部区域：应用标题和设置按钮 */}
       <div className="p-4 border-b border-border">
         <div className="flex items-center justify-between mb-3">
           <h1 className="text-lg font-semibold text-foreground">Claude Code Reader</h1>
@@ -68,7 +112,7 @@ export function Sidebar({
           </button>
         </div>
 
-        {/* 环境切换器 */}
+        {/* 环境切换器：集成 EnvSwitcher 组件，用于快速切换不同的环境配置 */}
         <div className="mb-3">
           <EnvSwitcher
             config={envConfig}
@@ -79,7 +123,7 @@ export function Sidebar({
           />
         </div>
 
-        {/* 搜索框 */}
+        {/* 搜索框：支持按项目路径或会话 ID 模糊搜索 */}
         <div className="relative">
           <svg
             className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-muted-foreground"
@@ -99,7 +143,7 @@ export function Sidebar({
         </div>
       </div>
 
-      {/* 项目列表 */}
+      {/* 项目列表：可折叠的树形结构，展示所有匹配搜索条件的项目 */}
       <div className="flex-1 overflow-y-auto">
         {filteredProjects.length === 0 ? (
           <div className="p-4 text-center text-muted-foreground">
@@ -108,7 +152,7 @@ export function Sidebar({
         ) : (
           filteredProjects.map((project) => (
             <div key={project.path} className="border-b border-border">
-              {/* 项目头 */}
+              {/* 项目头：点击后选中项目并展开/折叠其会话列表 */}
               <button
                 onClick={() => {
                   onSelectProject(project);

@@ -1,3 +1,19 @@
+/**
+ * @file App.tsx - 应用根组件
+ * @description
+ * ClaudeCodeReader (CCR) 的顶层 React 组件，负责：
+ * - 管理全局应用状态（项目、会话、消息、设置、主题等）
+ * - 协调子组件之间的数据流和事件通信
+ * - 处理应用初始化（加载 Claude Code 数据、设置、环境配置）
+ * - 提供加载中和错误边界的全屏 UI 反馈
+ *
+ * 组件层级结构：
+ * App
+ *  ├── Sidebar          - 左侧边栏（项目列表、会话列表、环境配置切换器）
+ *  ├── ChatView         - 主内容区（消息列表、消息操作）
+ *  └── SettingsPanel    - 设置面板（浮层，条件渲染）
+ */
+
 import { useState, useEffect, useCallback } from 'react';
 import { Sidebar, ChatView, SettingsPanel } from './components';
 import type { Project, Session, SessionMessage, ClaudeSettings, EnvSwitcherConfig, EnvProfile } from './types/claude';
@@ -15,37 +31,82 @@ import {
   saveCurrentAsProfile,
 } from './utils/claudeData';
 
+/**
+ * 应用根组件
+ *
+ * 作为 CCR 应用的唯一入口组件，管理所有全局状态并通过 props 将数据和回调函数
+ * 向下传递给子组件。采用"状态提升"模式（Lifting State Up），确保单一数据源。
+ *
+ * @returns 根据加载状态返回不同的 UI：加载中界面 / 错误界面 / 正常应用界面
+ */
 function App() {
+  /** Claude 数据目录的绝对路径（~/.claude/），所有数据读写操作的基础路径 */
   const [claudeDataPath, setClaudeDataPath] = useState<string>('');
+  /** 所有项目列表：从 ~/.claude/projects/ 目录扫描获得，按最新会话时间排序 */
   const [projects, setProjects] = useState<Project[]>([]);
+  /** 当前选中的项目：用户在侧边栏点击选择的项目，null 表示未选择任何项目 */
   const [currentProject, setCurrentProject] = useState<Project | null>(null);
+  /** 当前选中的会话：用户在侧边栏点击选择的会话，null 表示未选择任何会话 */
   const [currentSession, setCurrentSession] = useState<Session | null>(null);
+  /** 当前会话的消息列表：从选中会话的 JSONL 文件中加载的所有消息 */
   const [messages, setMessages] = useState<SessionMessage[]>([]);
+  /** Claude Code 设置：从 ~/.claude/settings.json 加载的用户配置 */
   const [settings, setSettings] = useState<ClaudeSettings>({});
+  /** 环境切换器配置：包含所有环境配置组和当前激活的配置 ID */
   const [envConfig, setEnvConfig] = useState<EnvSwitcherConfig>({ profiles: [], activeProfileId: null });
+  /** 设置面板可见性：控制 SettingsPanel 浮层的显示/隐藏 */
   const [showSettings, setShowSettings] = useState(false);
+  /** 正在编辑的环境配置组：非 null 时 SettingsPanel 进入"配置编辑模式"而非普通设置模式 */
   const [editingEnvProfile, setEditingEnvProfile] = useState<EnvProfile | null>(null);
+  /** 当前界面主题：'light' 浅色、'dark' 深色、'system' 跟随操作系统设置 */
   const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('system');
+  /** 全局加载状态：为 true 时显示全屏加载动画，阻止用户交互 */
   const [loading, setLoading] = useState(true);
+  /** 全局错误信息：非 null 时显示全屏错误提示页面 */
   const [error, setError] = useState<string | null>(null);
 
+  /**
+   * 主题切换副作用
+   *
+   * 监听 theme 状态变化，动态切换 HTML 根元素的 'dark' CSS 类名。
+   * - 'system' 模式下通过 matchMedia API 检测操作系统的深色模式偏好
+   * - 'light'/'dark' 模式下直接设置对应的类名
+   * Tailwind CSS 的暗色模式依赖根元素的 'dark' 类名来激活暗色样式。
+   *
+   * 触发条件：theme 状态变化时执行
+   */
   useEffect(() => {
     const root = document.documentElement;
     if (theme === 'system') {
+      // 系统模式：检测操作系统是否启用了深色主题
       const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
       root.classList.toggle('dark', isDark);
     } else {
+      // 手动模式：直接根据 theme 值设置
       root.classList.toggle('dark', theme === 'dark');
     }
   }, [theme]);
 
+  /**
+   * 应用初始化副作用
+   *
+   * 在组件首次挂载时执行，负责加载所有必要的初始数据：
+   * 1. 获取 Claude 数据目录路径
+   * 2. 并行加载设置、项目列表、环境配置（使用 Promise.all 优化性能）
+   * 3. 将加载结果写入各个状态变量
+   * 4. 处理加载过程中的错误，设置错误信息供 UI 展示
+   *
+   * 触发条件：仅在组件首次挂载时执行一次（依赖数组为空）
+   */
   useEffect(() => {
     const init = async () => {
       try {
         setLoading(true);
+        // 第一步：获取 Claude 数据目录路径
         const path = await getClaudeDataPath();
         setClaudeDataPath(path);
 
+        // 第二步：并行加载设置、项目列表和环境配置，减少总加载时间
         const [loadedSettings, loadedProjects, loadedEnvConfig] = await Promise.all([
           readSettings(path),
           getProjects(path),
@@ -67,6 +128,14 @@ function App() {
     init();
   }, []);
 
+  /**
+   * 处理会话选择事件
+   *
+   * 当用户在侧边栏点击某个会话时触发，加载该会话的所有消息并更新状态。
+   * 如果加载失败，清空消息列表并在控制台输出错误信息。
+   *
+   * @param session - 用户选择的会话对象
+   */
   const handleSelectSession = useCallback(async (session: Session) => {
     setCurrentSession(session);
     try {
@@ -78,6 +147,13 @@ function App() {
     }
   }, []);
 
+  /**
+   * 刷新当前会话的消息列表
+   *
+   * 重新从文件系统读取当前会话的 JSONL 文件，更新消息列表。
+   * 适用于外部工具（如 Claude Code CLI）修改了会话文件后，用户手动刷新查看最新内容。
+   * 仅在有选中会话时生效。
+   */
   const handleRefresh = useCallback(async () => {
     if (currentSession) {
       try {
@@ -89,6 +165,15 @@ function App() {
     }
   }, [currentSession]);
 
+  /**
+   * 处理消息编辑事件
+   *
+   * 将指定消息的文本内容更新为新内容，并保存到文件。
+   * 编辑操作会保持消息 content 字段的原有格式（字符串或数组）。
+   *
+   * @param uuid - 要编辑的消息的 UUID
+   * @param newContent - 新的文本内容
+   */
   const handleEditMessage = useCallback(
     async (uuid: string, newContent: string) => {
       if (!currentSession) return;
@@ -106,9 +191,18 @@ function App() {
     [currentSession]
   );
 
+  /**
+   * 处理消息删除事件
+   *
+   * 在用户确认后（通过浏览器原生 confirm 对话框），从会话文件中移除指定消息。
+   * 删除操作不可撤销，会直接修改 JSONL 文件。
+   *
+   * @param uuid - 要删除的消息的 UUID
+   */
   const handleDeleteMessage = useCallback(
     async (uuid: string) => {
       if (!currentSession) return;
+      // 弹出确认对话框，防止误操作
       if (!confirm('确定要删除这条消息吗？')) return;
       try {
         const updatedMessages = await deleteMessage(currentSession.filePath, uuid);
@@ -120,6 +214,14 @@ function App() {
     [currentSession]
   );
 
+  /**
+   * 处理设置保存事件
+   *
+   * 将更新后的设置对象保存到 ~/.claude/settings.json 文件，并更新本地状态。
+   * 此回调在 SettingsPanel 处于"普通设置模式"时使用。
+   *
+   * @param newSettings - 更新后的完整设置对象
+   */
   const handleSaveSettings = useCallback(
     async (newSettings: ClaudeSettings) => {
       try {
@@ -132,13 +234,23 @@ function App() {
     [claudeDataPath]
   );
 
-  // 环境配置切换
+  /**
+   * 处理环境配置切换事件
+   *
+   * 将选定的环境配置组应用到 Claude Code 的 settings.json 中，
+   * 同时更新环境切换器配置中的激活状态。
+   * 切换后，Claude Code 的下一次启动将使用新的环境变量。
+   *
+   * @param profile - 要切换到的目标环境配置组
+   */
   const handleSwitchEnvProfile = useCallback(
     async (profile: EnvProfile) => {
       try {
+        // 将配置组的环境变量写入 settings.json
         const updatedSettings = await applyEnvProfile(claudeDataPath, profile);
         setSettings(updatedSettings);
 
+        // 更新激活状态并持久化
         const updatedConfig = {
           ...envConfig,
           activeProfileId: profile.id,
@@ -152,11 +264,19 @@ function App() {
     [claudeDataPath, envConfig]
   );
 
-  // 保存当前配置
+  /**
+   * 处理保存当前环境为新配置组事件
+   *
+   * 将当前 settings.json 中的 env 字段内容保存为一个新的命名配置组，
+   * 并将其设置为激活状态。
+   *
+   * @param name - 新配置组的显示名称
+   */
   const handleSaveEnvProfile = useCallback(
     async (name: string) => {
       try {
         const profile = await saveCurrentAsProfile(claudeDataPath, name);
+        // 重新加载配置以确保数据一致性
         const updatedConfig = await readEnvSwitcherConfig(claudeDataPath);
         setEnvConfig(updatedConfig);
         console.log('保存配置成功:', profile.name);
@@ -167,13 +287,22 @@ function App() {
     [claudeDataPath]
   );
 
-  // 删除配置
+  /**
+   * 处理删除环境配置组事件
+   *
+   * 从配置列表中移除指定的配置组。如果被删除的配置组是当前激活的，
+   * 则将激活状态重置为 null（无激活配置）。
+   *
+   * @param profileId - 要删除的配置组 ID
+   */
   const handleDeleteEnvProfile = useCallback(
     async (profileId: string) => {
       try {
         const updatedConfig = {
           ...envConfig,
+          // 过滤掉目标配置组
           profiles: envConfig.profiles.filter(p => p.id !== profileId),
+          // 如果删除的是当前激活的配置，重置激活状态为 null
           activeProfileId: envConfig.activeProfileId === profileId ? null : envConfig.activeProfileId,
         };
         await saveEnvSwitcherConfig(claudeDataPath, updatedConfig);
@@ -185,20 +314,37 @@ function App() {
     [claudeDataPath, envConfig]
   );
 
-  // 编辑配置（打开设置面板并预填充）
+  /**
+   * 处理编辑环境配置组事件
+   *
+   * 将目标配置组设置为"正在编辑"状态，并打开设置面板。
+   * 这会使 SettingsPanel 进入"配置编辑模式"，显示配置组的环境变量而非全局设置。
+   *
+   * @param profile - 要编辑的环境配置组
+   */
   const handleEditEnvProfile = useCallback((profile: EnvProfile) => {
     setEditingEnvProfile(profile);
     setShowSettings(true);
   }, []);
 
-  // 保存编辑后的配置
+  /**
+   * 处理保存编辑后的环境配置组事件
+   *
+   * 更新配置组的环境变量内容和更新时间，然后持久化到配置文件。
+   * 如果被编辑的配置组当前正在激活使用，还会同步更新 settings.json 中的 env 字段，
+   * 确保修改立即生效。
+   *
+   * @param profile - 包含更新后数据的配置组对象
+   */
   const handleSaveEditedProfile = useCallback(
     async (profile: EnvProfile) => {
       try {
+        // 更新配置组的最后修改时间
         const updatedProfile = {
           ...profile,
           updatedAt: new Date().toISOString(),
         };
+        // 在配置列表中替换目标配置组
         const updatedConfig = {
           ...envConfig,
           profiles: envConfig.profiles.map(p => p.id === profile.id ? updatedProfile : p),
@@ -206,12 +352,13 @@ function App() {
         await saveEnvSwitcherConfig(claudeDataPath, updatedConfig);
         setEnvConfig(updatedConfig);
 
-        // 如果是当前激活的配置，同时更新 settings
+        // 如果编辑的是当前激活的配置组，需要同步更新 settings.json
         if (profile.id === envConfig.activeProfileId) {
           await applyEnvProfile(claudeDataPath, updatedProfile);
           setSettings(prev => ({ ...prev, env: updatedProfile.env }));
         }
 
+        // 退出编辑模式
         setEditingEnvProfile(null);
       } catch (err) {
         console.error('保存编辑配置失败:', err);
@@ -220,6 +367,7 @@ function App() {
     [claudeDataPath, envConfig]
   );
 
+  // ============ 条件渲染：加载中状态 ============
   if (loading) {
     return (
       <div className="h-screen flex items-center justify-center bg-background">
@@ -231,6 +379,7 @@ function App() {
     );
   }
 
+  // ============ 条件渲染：错误状态 ============
   if (error) {
     return (
       <div className="h-screen flex items-center justify-center bg-background">
@@ -261,8 +410,10 @@ function App() {
     );
   }
 
+  // ============ 正常渲染：主应用界面 ============
   return (
     <div className="h-screen flex bg-background">
+      {/* 左侧边栏：项目导航、会话列表、环境配置切换 */}
       <Sidebar
         projects={projects}
         currentProject={currentProject}
@@ -277,6 +428,7 @@ function App() {
         onEditEnvProfile={handleEditEnvProfile}
       />
 
+      {/* 主内容区：聊天消息展示和操作 */}
       <ChatView
         session={currentSession}
         messages={messages}
@@ -285,6 +437,20 @@ function App() {
         onRefresh={handleRefresh}
       />
 
+      {/*
+        设置面板（浮层）：根据 showSettings 条件渲染。
+        支持两种渲染模式：
+
+        1. 普通设置模式（editingEnvProfile 为 null）：
+           - 显示全局 Claude Code 设置
+           - onSaveSettings 直接调用 handleSaveSettings 保存到 settings.json
+
+        2. 配置编辑模式（editingEnvProfile 不为 null）：
+           - 显示指定环境配置组的环境变量
+           - settings 属性被替换为配置组的 env 内容
+           - onSaveSettings 被替换为一个包装函数，将编辑结果
+             通过 handleSaveEditedProfile 保存到环境配置文件
+      */}
       {showSettings && (
         <SettingsPanel
           settings={editingEnvProfile ? { ...settings, env: editingEnvProfile.env } : settings}
@@ -302,6 +468,7 @@ function App() {
           onThemeChange={setTheme}
           onClose={() => {
             setShowSettings(false);
+            // 关闭面板时同时退出配置编辑模式
             setEditingEnvProfile(null);
           }}
         />
