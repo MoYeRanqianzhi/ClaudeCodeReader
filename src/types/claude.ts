@@ -214,10 +214,17 @@ export interface MessageContent {
    * - 'tool_use'：工具调用块，表示 AI 请求执行某个工具（如读取文件、运行命令）
    * - 'tool_result'：工具结果块，包含工具执行后的返回结果
    * - 'image'：图片内容块，包含图片数据（通常为 Base64 编码）
+   * - 'thinking'：思考内容块，包含 AI 的扩展思维（Extended Thinking）推理过程
    */
-  type: 'text' | 'tool_use' | 'tool_result' | 'image';
+  type: 'text' | 'tool_use' | 'tool_result' | 'image' | 'thinking';
   /** 文本内容：当 type 为 'text' 时，存储实际的文本字符串 */
   text?: string;
+  /**
+   * 思考内容：当 type 为 'thinking' 时，存储 AI 的内部推理过程文本。
+   * 这是 Claude 扩展思维（Extended Thinking）功能生成的思维链内容，
+   * 帮助用户了解 AI 得出结论的推理步骤。
+   */
+  thinking?: string;
   /** 内容块 ID：工具调用块的唯一标识符，工具结果通过此 ID 与对应的调用关联 */
   id?: string;
   /** 工具名称：当 type 为 'tool_use' 时，指定要调用的工具名称（如 "Read"、"Bash"、"Edit"） */
@@ -231,6 +238,23 @@ export interface MessageContent {
    * 可以是简单字符串，也可以是嵌套的 MessageContent 数组（如包含文本和图片的复合结果）。
    */
   content?: string | MessageContent[];
+  /**
+   * 图片数据源：当 type 为 'image' 时，包含图片的编码数据信息。
+   * 通过 media_type 和 data 字段可以构造完整的 data URI 用于渲染。
+   */
+  source?: {
+    /** 数据源类型：通常为 "base64"，表示图片数据采用 Base64 编码 */
+    type: string;
+    /** MIME 类型：图片的媒体类型，如 "image/png"、"image/jpeg" 等 */
+    media_type: string;
+    /** 图片数据：Base64 编码的图片二进制数据 */
+    data: string;
+  };
+  /**
+   * 错误标志：当 type 为 'tool_result' 时，指示工具执行是否发生了错误。
+   * 为 true 表示工具执行失败，UI 应以红色错误样式渲染此结果块。
+   */
+  is_error?: boolean;
 }
 
 /**
