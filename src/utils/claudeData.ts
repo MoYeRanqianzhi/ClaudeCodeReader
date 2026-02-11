@@ -459,6 +459,24 @@ export async function deleteMessage(sessionFilePath: string, messageUuid: string
 }
 
 /**
+ * 批量删除多条消息
+ *
+ * 根据消息 UUID 集合从会话文件中移除多条消息，然后将剩余消息重新保存到文件。
+ * 使用 Set 数据结构进行 O(1) 查找，保证批量删除的性能。
+ *
+ * @param sessionFilePath - 会话 JSONL 文件的绝对路径
+ * @param messageUuids - 要删除的消息 UUID 集合（Set<string>）
+ * @returns 返回删除后的剩余消息列表
+ */
+export async function deleteMessages(sessionFilePath: string, messageUuids: Set<string>): Promise<SessionMessage[]> {
+  const messages = await readSessionMessages(sessionFilePath);
+  // 使用 Set.has() 进行高效过滤，排除所有需要删除的消息
+  const filtered = messages.filter(msg => !messageUuids.has(msg.uuid));
+  await saveSessionMessages(sessionFilePath, filtered);
+  return filtered;
+}
+
+/**
  * 编辑指定消息的文本内容
  *
  * 根据消息 UUID 定位目标消息，更新其文本内容并保存。

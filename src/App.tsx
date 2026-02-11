@@ -194,16 +194,15 @@ function App() {
   /**
    * 处理消息删除事件
    *
-   * 在用户确认后（通过浏览器原生 confirm 对话框），从会话文件中移除指定消息。
-   * 删除操作不可撤销，会直接修改 JSONL 文件。
+   * 从会话文件中移除指定消息。删除操作不可撤销，会直接修改 JSONL 文件。
+   * 不再使用浏览器原生 confirm 对话框（在 Tauri WebView 中行为不一致），
+   * 而是直接执行删除操作。
    *
    * @param uuid - 要删除的消息的 UUID
    */
   const handleDeleteMessage = useCallback(
     async (uuid: string) => {
       if (!currentSession) return;
-      // 弹出确认对话框，防止误操作
-      if (!confirm('确定要删除这条消息吗？')) return;
       try {
         const updatedMessages = await deleteMessage(currentSession.filePath, uuid);
         setMessages(updatedMessages);
