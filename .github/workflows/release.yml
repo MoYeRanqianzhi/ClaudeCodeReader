@@ -11,7 +11,7 @@
 #   2. 分支推送 (任意分支):
 #      → 构建并发布预发布版 Pre-release
 #      → 仅上传到 GitHub Release，不发布到 NPM
-#      → Release tag 格式: build-{short_sha}
+#      → Release tag 格式: build-{YYYYMMDDHHmmss}-{short_sha}
 #      → Release name 格式: Pre-release {version}+build.{YYYYMMDDHHmmss}
 #
 #   3. 手动触发 (workflow_dispatch):
@@ -105,7 +105,8 @@ jobs:
             SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
 
             echo "is_release=false" >> "$GITHUB_OUTPUT"
-            echo "tag_name=build-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+            # tag 格式使用 build-TIMESTAMP-SHA，保证按时间自然排序
+            echo "tag_name=build-${TIMESTAMP}-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
             echo "release_name=Pre-release ${APP_VERSION}+build.${TIMESTAMP}" >> "$GITHUB_OUTPUT"
             echo "timestamp=$TIMESTAMP" >> "$GITHUB_OUTPUT"
             # 预发布：产物版本号附加 +build.TIMESTAMP 后缀，用于区分不同构建
