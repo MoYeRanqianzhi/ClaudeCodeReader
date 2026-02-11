@@ -83,23 +83,55 @@ CI/CD 配置文件位于 `.github/workflows/release.yml`，实现了从创建发
 
 ### 触发条件
 
-推送匹配 `v*` 模式的 Git 标签时触发（例如 `v0.1.0-beta.4`）。
+工作流支持三种触发方式：
 
-包含 `beta` 或 `alpha` 关键字的标签会自动标记为预发布版本（prerelease）。
+| 触发方式 | 条件 | 发布类型 | 说明 |
+|----------|------|----------|------|
+| Tag 推送 | 推送 `v*` 格式标签 | 正式发布 (Release) | 构建全平台产物 + 发布到 NPM |
+| 分支推送 | 推送到任意分支 | 预发布 (Pre-release) | 构建全平台产物，不发布到 NPM |
+| 手动触发 | `workflow_dispatch` 指定 Tag | 正式发布 (Release) | 补发历史版本，用于修复发布失败 |
 
-### Job 1: create-release
+#### 并发控制
+
+同一分支/标签上的多次推送只保留最新一次构建，旧的运行会被自动取消，避免浪费 CI 资源。
+
+### Job 1: prepare
 
 | 项目 | 详情 |
 |------|------|
 | 运行环境 | `ubuntu-latest` |
+| 主要操作 | 判断发布类型、提取版本信息、生成变更日志 |
+| 版本提取 | 从 `package.json` 读取 `version` 字段 |
+| 变更日志 | 从上一个 `v*` tag 到 HEAD 的提交列表 |
+
+该 Job 负责所有元数据计算，通过 `outputs` 将以下信息传递给下游 Job：
+
+| 输出 | 说明 | 正式发布示例 | 预发布示例 |
+|------|------|-------------|-----------|
+| `is_release` | 是否正式发布 | `true` | `false` |
+| `tag_name` | Release tag | `v0.2.0` | `build-abc1234` |
+| `release_name` | Release 显示名称 | `ClaudeCodeReader 0.2.0` | `Pre-release 0.1.0-beta.4+build.20260212120000` |
+| `timestamp` | 构建时间 (CST) | — | `20260212120000` |
+| `app_version` | 应用版本号 | `0.2.0` | `0.1.0-beta.4` |
+| `changelog` | 变更日志 | 提交列表 | 提交列表 |
+
+### Job 2: create-release
+
+| 项目 | 详情 |
+|------|------|
+| 依赖 | `prepare` |
+| 运行环境 | `ubuntu-latest` |
 | 主要操作 | 创建 GitHub Release |
-| 发布说明 | 自动生成（`generate_release_notes: true`） |
-| 预发布判断 | 标签名包含 `beta` 或 `alpha` 则标记为 prerelease |
-| 输出 | `release_id`，供后续 Job 使用 |
+| 输出 | `release_id`，供 `build-tauri` Job 上传产物 |
 
-### Job 2: build-tauri
+根据 `prepare` 的判断结果，分别创建正式版或预发布版 Release：
 
-依赖 `create-release` Job 完成后执行。使用策略矩阵（`matrix`）实现 4 个平台/架构的并行构建：
+- **正式版**：启用自动生成 Release Notes，包含自定义变更日志，标记为 `make_latest: true`
+- **预发布版**：包含分支、提交 SHA、构建时间等元信息表格，以及本次提交内容和变更记录
+
+### Job 3: build-tauri
+
+依赖 `prepare` 和 `create-release` Job 完成后执行。使用策略矩阵（`matrix`）实现 4 个平台/架构的并行构建：
 
 | 平台 | 运行环境 | Rust Target | 构建参数 | 额外步骤 |
 |------|----------|-------------|----------|----------|
@@ -116,9 +148,15 @@ CI/CD 配置文件位于 `.github/workflows/release.yml`，实现了从创建发
 5. 使用 `tauri-apps/tauri-action@v0` 执行构建并将产物上传到 GitHub Release
 6. 上传额外的平台专属二进制文件（Windows `.exe`、macOS `.app.tar.gz`）
 
-### Job 3: publish-npm
+### Job 4: publish-npm
 
-依赖 `build-tauri` Job 全部完成后执行。
+| 项目 | 详情 |
+|------|------|
+| 依赖 | `prepare` + `build-tauri` |
+| 执行条件 | 仅正式发布时执行（`is_release == 'true'`） |
+| 运行环境 | `ubuntu-latest` |
+
+> **注意：** 预发布版本不会发布到 NPM，避免污染包版本。用户只能从 GitHub Release 下载预发布构建产物。
 
 | 步骤 | 说明 |
 |------|------|
@@ -131,11 +169,13 @@ CI/CD 配置文件位于 `.github/workflows/release.yml`，实现了从创建发
 
 ---
 
-## 发布流程（手动步骤）
+## 发布流程
+
+### 正式版发布（手动步骤）
 
 以发布 `v0.2.0` 为例：
 
-### 第 1 步：更新版本号
+#### 第 1 步：更新版本号
 
 需要同步更新以下 **4 个文件** 中的版本号：
 
@@ -148,7 +188,7 @@ CI/CD 配置文件位于 `.github/workflows/release.yml`，实现了从创建发
 
 > **注意：** `npm/scripts/postinstall.js` 中的 `VERSION` 常量由 CI 自动更新，无需手动修改。
 
-### 第 2 步：提交并打标签
+#### 第 2 步：提交并打标签
 
 ```bash
 git add -A
@@ -156,13 +196,36 @@ git commit -m "release: v0.2.0"
 git tag v0.2.0
 ```
 
-### 第 3 步：推送触发自动构建
+#### 第 3 步：推送触发自动构建
 
 ```bash
 git push origin main --tags
 ```
 
-推送标签后，GitHub Actions 将自动执行完整的构建和发布流程。
+推送标签后，GitHub Actions 将自动执行完整的构建和发布流程（创建 Release → 多平台构建 → NPM 发布）。
+
+### 预发布（自动触发）
+
+向任意分支推送代码时，工作流会自动构建并创建 Pre-release：
+
+- **触发条件**：`git push`（任意分支）
+- **Release tag**：`build-{short_sha}`（7 位提交哈希）
+- **Release name**：`Pre-release {version}+build.{timestamp}`
+- **产物**：与正式版相同的全平台构建产物
+- **NPM**：不发布到 NPM
+- **Release body**：包含分支、提交 SHA、构建时间信息表格，以及本次提交内容和变更记录
+
+> **注意：** 同一分支的多次推送会自动取消旧的构建，只保留最新一次。
+
+### 手动补发历史版本
+
+当某次发布的 CI 失败或需要重新构建历史版本时，可通过 `workflow_dispatch` 手动触发：
+
+1. 前往仓库 GitHub Actions 页面
+2. 选择 "Build & Release" 工作流
+3. 点击 "Run workflow"
+4. 输入要补发的 Tag 名称（例如 `v0.1.0-beta.4`）
+5. 点击确认，工作流将以该 Tag 的代码为基准执行完整的构建和发布
 
 ---
 

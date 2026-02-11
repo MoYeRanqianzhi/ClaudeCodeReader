@@ -1,59 +1,245 @@
 # =============================================================================
-# ClaudeCodeReader 多平台构建与发布工作流
+# ClaudeCodeReader CI/CD 工作流
+# =============================================================================
+# 自动构建与发布工作流，支持以下三种触发方式：
 #
-# 用途：当推送匹配 'v*' 模式的 Git 标签时（如 v0.1.0、v1.0.0-beta.1），
-# 自动执行以下流水线：
-#   1. 创建 GitHub Release（支持正式版和预发布版）
-#   2. 在 4 个平台/架构上并行构建 Tauri 桌面应用
-#   3. 将构建产物上传到 GitHub Release
-#   4. 发布 NPM 包（供 `npm install -g claude-code-reader` 安装）
+#   1. Tag 推送 (v*):
+#      → 构建并发布正式版 Release
+#      → 构建所有平台的 Tauri 桌面应用
+#      → 发布到 NPM Registry
+#
+#   2. 分支推送 (任意分支):
+#      → 构建并发布预发布版 Pre-release
+#      → 仅上传到 GitHub Release，不发布到 NPM
+#      → Release tag 格式: build-{short_sha}
+#      → Release name 格式: Pre-release {version}+build.{YYYYMMDDHHmmss}
+#
+#   3. 手动触发 (workflow_dispatch):
+#      → 指定已有 Tag 补发历史版本
+#      → 用于修复发布失败等场景
 # =============================================================================
 
-name: Build and Release
+name: Build & Release
 
-# 触发条件：仅在推送以 'v' 开头的标签时触发（如 v0.1.0、v1.0.0-beta.1）
-# 普通的代码提交和 PR 不会触发此工作流
 on:
   push:
-    tags:
-      - 'v*'
+    branches: ['**']    # 所有分支推送 → 触发预发布构建
+    tags: ['v*']        # v 前缀的标签推送 → 触发正式发布
+  # 手动触发：用于补发历史版本（例如 CI 失败后重新发布）
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要构建并发布的 Tag 名称（例如 v0.1.0-beta.4）'
+        required: true
+        type: string
+
+# 并发控制：同一分支/标签上的多次推送只保留最新一次构建，取消旧的运行
+# 避免浪费 CI 资源（特别是 Tauri 多平台构建较为耗时）
+concurrency:
+  group: build-${{ github.event.inputs.tag || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   # ===========================================================================
-  # Job 1: 创建 GitHub Release
-  # 在构建开始前先创建一个 Release 占位，后续构建任务会将产物上传到此 Release。
+  # Job 1: 准备阶段 — 判断发布类型、提取版本信息、生成变更日志
+  # 该 Job 负责所有元数据计算，将结果通过 outputs 传递给下游 Job，
+  # 避免在多个 Job 中重复判断逻辑。
+  # ===========================================================================
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      # 是否为正式发布（true: tag 推送或手动触发; false: 分支推送预发布）
+      is_release: ${{ steps.release_type.outputs.is_release }}
+      # 用于 GitHub Release 的 tag 名称
+      tag_name: ${{ steps.release_type.outputs.tag_name }}
+      # Release 显示名称
+      release_name: ${{ steps.release_type.outputs.release_name }}
+      # 预发布构建的时间戳（仅预发布使用）
+      timestamp: ${{ steps.release_type.outputs.timestamp }}
+      # 从 package.json 提取的应用版本号
+      app_version: ${{ steps.version.outputs.version }}
+      # 自动生成的变更日志内容
+      changelog: ${{ steps.changelog.outputs.log }}
+
+    steps:
+      # 手动触发时 checkout 指定的 tag，否则 checkout 当前 ref
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0    # 拉取完整 Git 历史，用于生成变更日志
+
+      # 从 package.json 提取版本号，作为所有后续步骤的版本基准
+      - name: Extract app version from package.json
+        id: version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "App version: $VERSION"
+
+      # 核心逻辑：根据触发来源判断是正式发布还是预发布
+      # - refs/tags/v* 或 workflow_dispatch → 正式发布
+      # - 分支推送 → 预发布
+      - name: Determine release type
+        id: release_type
+        run: |
+          INPUT_TAG="${{ github.event.inputs.tag }}"
+          APP_VERSION="${{ steps.version.outputs.version }}"
+
+          if [[ "${{ github.ref }}" == refs/tags/v* ]] || [[ -n "$INPUT_TAG" ]]; then
+            # ---- 正式发布：Tag 推送 或 手动触发 ----
+            TAG_NAME="${INPUT_TAG:-${{ github.ref_name }}}"
+
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+            echo "tag_name=$TAG_NAME" >> "$GITHUB_OUTPUT"
+            echo "release_name=ClaudeCodeReader ${APP_VERSION}" >> "$GITHUB_OUTPUT"
+            echo "Release type: RELEASE (tag=$TAG_NAME, version=$APP_VERSION)"
+          else
+            # ---- 预发布：普通分支推送 ----
+            # 使用 CST（中国标准时间）生成时间戳
+            TIMESTAMP=$(TZ='Asia/Shanghai' date +%Y%m%d%H%M%S)
+            SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+            echo "tag_name=build-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+            echo "release_name=Pre-release ${APP_VERSION}+build.${TIMESTAMP}" >> "$GITHUB_OUTPUT"
+            echo "timestamp=$TIMESTAMP" >> "$GITHUB_OUTPUT"
+            echo "Release type: PRE-RELEASE (sha=$SHORT_SHA, version=$APP_VERSION, timestamp=$TIMESTAMP)"
+          fi
+
+      # 自动生成变更日志：提取从上一个正式版 tag 到当前 HEAD 的所有提交
+      - name: Generate changelog
+        id: changelog
+        run: |
+          INPUT_TAG="${{ github.event.inputs.tag }}"
+          IS_TAG_BUILD=false
+
+          # 判断是否为 tag 构建（Tag 推送或手动触发）
+          if [[ "${{ github.ref }}" == refs/tags/v* ]] || [[ -n "$INPUT_TAG" ]]; then
+            IS_TAG_BUILD=true
+            CURRENT_TAG="${INPUT_TAG:-${{ github.ref_name }}}"
+          fi
+
+          # 查找上一个正式版 tag（v* 格式，按版本号降序排列）
+          # 如果是 tag 构建，需要排除当前 tag 自身，否则会得到空的变更记录
+          if [ "$IS_TAG_BUILD" = true ]; then
+            LAST_TAG=$(git tag -l 'v*' --sort=-v:refname | grep -v "^${CURRENT_TAG}$" | head -n1 2>/dev/null || echo "")
+          else
+            LAST_TAG=$(git tag -l 'v*' --sort=-v:refname | head -n1 2>/dev/null || echo "")
+          fi
+
+          echo "Last release tag: ${LAST_TAG:-'(none)'}"
+
+          # 生成变更日志
+          if [ -n "$LAST_TAG" ]; then
+            # 有历史 tag：提取从上一个 tag 到 HEAD 的所有非合并提交
+            LOG=$(git log "${LAST_TAG}..HEAD" --pretty=format:"- %s (\`%h\`)" --no-merges)
+          else
+            # 没有历史 tag（首次发布）：取最近 30 条提交
+            LOG=$(git log --pretty=format:"- %s (\`%h\`)" --no-merges -30)
+          fi
+
+          # 使用 EOF 定界符处理多行输出，避免特殊字符转义问题
+          {
+            echo "log<<EOF"
+            echo "$LOG"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+  # ===========================================================================
+  # Job 2: 创建 GitHub Release
+  # 根据 prepare Job 的判断结果，创建正式版或预发布版的 GitHub Release。
   # ===========================================================================
   create-release:
+    needs: prepare    # 依赖 prepare Job 完成，获取发布类型和元数据
     runs-on: ubuntu-latest
     permissions:
       contents: write    # 需要写权限才能创建 Release 和上传资产
     outputs:
-      release_id: ${{ steps.create_release.outputs.id }}    # 将 Release ID 传递给下游 Job
+      # 统一的 Release ID，由 set_release_id 步骤根据发布类型合并正式版/预发布版的输出
+      release_id: ${{ steps.set_release_id.outputs.id }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          fetch-depth: 0    # 拉取完整历史，以便自动生成 Release Notes
+          ref: ${{ github.event.inputs.tag || github.ref }}
 
+      # ---- 正式版 Release ----
+      # Tag 推送或手动触发时创建，标记为最新正式版，启用自动生成 Release Notes
       - name: Create Release
+        if: needs.prepare.outputs.is_release == 'true'
         id: create_release
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true    # 根据 commit 历史自动生成变更说明
+          tag_name: ${{ needs.prepare.outputs.tag_name }}
+          name: ${{ needs.prepare.outputs.release_name }}
           draft: false
-          # 预发布判断：如果标签名包含 'beta' 或 'alpha'（如 v1.0.0-beta.1），
-          # 则将此 Release 标记为预发布版本，不会显示为最新正式版
-          prerelease: ${{ contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') }}
+          prerelease: ${{ contains(needs.prepare.outputs.tag_name, 'beta') || contains(needs.prepare.outputs.tag_name, 'alpha') }}
+          generate_release_notes: true
+          body: |
+            ## ClaudeCodeReader ${{ needs.prepare.outputs.app_version }}
+
+            ### 更新内容
+
+            ${{ needs.prepare.outputs.changelog }}
+
+            ---
+            *完整变更日志见下方 GitHub 自动生成的内容。*
+          make_latest: true
+
+      # ---- 预发布版 Pre-release ----
+      # 分支推送时创建，标记为预发布，不影响 latest 标记
+      - name: Create Pre-release
+        if: needs.prepare.outputs.is_release == 'false'
+        id: create_prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag_name }}
+          name: ${{ needs.prepare.outputs.release_name }}
+          draft: false
+          prerelease: true
+          generate_release_notes: false
+          body: |
+            ## 预发布版 ClaudeCodeReader ${{ needs.prepare.outputs.app_version }}
+
+            > ⚠️ 此版本为自动构建的预发布版本，可能不稳定，仅供测试使用。
+
+            | 信息 | 值 |
+            |------|-----|
+            | **分支** | `${{ github.ref_name }}` |
+            | **提交** | `${{ github.sha }}` |
+            | **构建时间 (CST)** | `${{ needs.prepare.outputs.timestamp }}` |
+
+            ### 本次提交
+
+            ${{ github.event.head_commit.message }}
+
+            ### 变更记录
+
+            ${{ needs.prepare.outputs.changelog }}
+          make_latest: false
+
+      # 统一输出 Release ID（无论正式版还是预发布版）
+      # 使用条件表达式合并两个 step 的输出，供下游 build-tauri Job 使用
+      - name: Set release ID output
+        id: set_release_id
+        run: |
+          if [ "${{ needs.prepare.outputs.is_release }}" = "true" ]; then
+            echo "id=${{ steps.create_release.outputs.id }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "id=${{ steps.create_prerelease.outputs.id }}" >> "$GITHUB_OUTPUT"
+          fi
 
   # ===========================================================================
-  # Job 2: 在多个平台上并行构建 Tauri 桌面应用
+  # Job 3: 在多个平台上并行构建 Tauri 桌面应用
   # 依赖 create-release Job，需要 Release ID 来上传构建产物。
-  # 构建完成后将 .msi/.exe/.dmg/.deb/.AppImage 等安装包上传到 GitHub Release。
+  # 构建完成后将 .exe/.dmg/.deb/.AppImage 等安装包上传到 GitHub Release。
   # ===========================================================================
   build-tauri:
-    needs: create-release    # 等待 Release 创建完成后再开始构建
+    needs: [prepare, create-release]    # 同时依赖 prepare（元数据）和 create-release（Release ID）
     permissions:
-      contents: write        # 需要写权限来上传构建产物到 Release
+      contents: write                   # 需要写权限来上传构建产物到 Release
     strategy:
       # fail-fast: false — 即使某个平台构建失败，其他平台仍继续构建。
       # 这样可以最大化成功产物数量，避免因单平台问题阻塞所有发布。
@@ -81,6 +267,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -121,14 +309,15 @@ jobs:
       - name: Upload Windows binary
         if: matrix.platform == 'windows-latest'
         run: |
-          # 从 Git 标签提取版本号：v0.1.0 → 0.1.0（去掉前缀 'v'）
-          VERSION=${GITHUB_REF_NAME#v}
+          # 使用从 package.json 提取的版本号（而非 Git tag，以兼容预发布场景）
+          VERSION="${{ needs.prepare.outputs.app_version }}"
           cp src-tauri/target/release/claude-code-reader.exe "ClaudeCodeReader_${VERSION}_x64.exe"
         shell: bash
       - name: Upload Windows binary to release
         if: matrix.platform == 'windows-latest'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.prepare.outputs.tag_name }}
           files: ClaudeCodeReader_*_x64.exe
 
       # ---- macOS 额外步骤：打包 .app 为 tar.gz 并上传 ----
@@ -137,28 +326,33 @@ jobs:
       - name: Upload macOS binary
         if: matrix.platform == 'macos-latest'
         run: |
-          # 从 Git 标签提取版本号：v0.1.0 → 0.1.0
-          VERSION=${GITHUB_REF_NAME#v}
+          VERSION="${{ needs.prepare.outputs.app_version }}"
           cd src-tauri/target/${{ matrix.target }}/release/bundle/macos
           tar -czvf ClaudeCodeReader_${VERSION}_${{ matrix.target }}.app.tar.gz ClaudeCodeReader.app
       - name: Upload macOS binary to release
         if: matrix.platform == 'macos-latest'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.prepare.outputs.tag_name }}
           files: src-tauri/target/${{ matrix.target }}/release/bundle/macos/ClaudeCodeReader_*_${{ matrix.target }}.app.tar.gz
 
   # ===========================================================================
-  # Job 3: 发布 NPM 包
+  # Job 4: 发布 NPM 包
+  # 仅在正式发布时执行（Tag 推送或手动触发），预发布不发布到 NPM。
   # 在所有平台构建完成后，将 npm/ 目录作为独立包发布到 NPM Registry。
   # 用户通过 `npm install -g claude-code-reader` 安装后，
   # postinstall 脚本会自动从 GitHub Releases 下载对应平台的二进制文件。
   # ===========================================================================
   publish-npm:
-    needs: build-tauri    # 等待所有平台构建完成，确保 Release 资产已就绪
+    needs: [prepare, build-tauri]    # 等待元数据准备和所有平台构建完成
+    # 仅正式发布时才执行 NPM 发布，预发布版本不推送到 NPM，避免污染包版本
+    if: needs.prepare.outputs.is_release == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -171,8 +365,9 @@ jobs:
       - name: Update version from release tag
         working-directory: npm
         run: |
-          # 从 Git 标签提取版本号：v0.1.0 → 0.1.0
-          VERSION=${GITHUB_REF_NAME#v}
+          # 从 prepare Job 获取 tag 名称，去掉 'v' 前缀得到版本号
+          TAG_NAME="${{ needs.prepare.outputs.tag_name }}"
+          VERSION="${TAG_NAME#v}"
           npm version $VERSION --no-git-tag-version --allow-same-version
 
       # 使用 sed 命令替换 postinstall.js 中硬编码的 VERSION 常量值，
@@ -180,7 +375,8 @@ jobs:
       - name: Update postinstall script version
         working-directory: npm
         run: |
-          VERSION=${GITHUB_REF_NAME#v}
+          TAG_NAME="${{ needs.prepare.outputs.tag_name }}"
+          VERSION="${TAG_NAME#v}"
           sed -i "s/const VERSION = '.*'/const VERSION = '$VERSION'/" scripts/postinstall.js
 
       # 修复 package.json 中可能存在的格式问题（如缺少必要字段）
@@ -196,7 +392,8 @@ jobs:
       - name: Publish to NPM
         working-directory: npm
         run: |
-          VERSION=${GITHUB_REF_NAME#v}
+          TAG_NAME="${{ needs.prepare.outputs.tag_name }}"
+          VERSION="${TAG_NAME#v}"
           if [[ "$VERSION" == *"beta"* ]] || [[ "$VERSION" == *"alpha"* ]]; then
             npm publish --access public --tag beta
           else

@@ -48,15 +48,21 @@
 - 下载进度显示和已安装检测（幂等）
 
 #### CI/CD 与多平台支持
-- GitHub Actions 自动化构建与发布流水线
-- 推送 `v*` 标签自动触发构建
+- GitHub Actions 自动化构建与发布流水线，支持三种触发方式：
+  - **Tag 推送** (`v*`)：构建并发布正式版 Release + NPM 发布
+  - **分支推送**（任意分支）：自动构建并发布预发布版 Pre-release（不发布到 NPM）
+  - **手动触发** (`workflow_dispatch`)：指定 Tag 补发历史版本，用于修复发布失败等场景
+- 并发控制：同一分支/标签的多次推送自动取消旧构建，仅保留最新一次
+- `prepare` Job 统一处理发布类型判断、版本信息提取和变更日志生成
+- 自动变更日志：从上一个 `v*` tag 到 HEAD 的 Git 提交历史自动生成
 - 4 平台/架构并行构建矩阵：
   - Windows x64（NSIS 安装包 + 独立 .exe）
   - macOS ARM64（.app.tar.gz + .dmg）
   - macOS x86_64（.app.tar.gz + .dmg）
   - Linux amd64（.AppImage + .deb）
-- 构建完成后自动发布到 NPM（beta/alpha 版使用 `--tag beta`）
-- 自动生成 GitHub Release 发布说明
+- 正式版构建完成后自动发布到 NPM（beta/alpha 版使用 `--tag beta`）
+- 预发布版 Release 包含分支、提交 SHA、构建时间等元信息
+- 正式版 Release 包含自动生成的更新内容和 GitHub Release Notes
 
 #### 技术架构
 - 前端：React 19 + TypeScript 5.9 + Vite 7 + TailwindCSS 4
