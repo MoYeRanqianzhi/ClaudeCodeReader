@@ -154,3 +154,85 @@ body {
 .min-w-0 { min-width: 0; }
 .overflow-hidden { overflow: hidden; }
 .overflow-y-auto { overflow-y: auto; }
+
+/* ==========================================================================
+   内容块样式
+   不同类型的消息内容块使用独立的视觉样式进行区分：
+   - 工具调用 (tool_use): 蓝色左边框，表示 AI 正在使用工具
+   - 工具结果 (tool_result): 绿色左边框表示成功，红色表示失败
+   - 思考过程 (thinking): 虚线左边框，暗示这是内部推理过程
+   - 图片 (image): 轻微的边框和内边距包裹
+   - 可折叠区块 (<details>): 统一的折叠/展开交互样式
+   ========================================================================== */
+
+/** 工具调用块：蓝色左边框 + 淡蓝色背景，表示 AI 发起了一次工具调用 */
+.tool-use-block {
+  border-left: 3px solid hsl(217 91% 60%);
+  background: color-mix(in srgb, hsl(217 91% 60%) 5%, transparent);
+  padding: 0.75rem;
+  border-radius: 0.375rem;
+  margin: 0.25rem 0;
+}
+
+/** 工具调用块中的工具图标：右侧留出间距，使图标与工具名称对齐 */
+.tool-use-icon {
+  margin-right: 0.5rem;
+}
+
+/** 工具结果块：绿色左边框 + 淡绿色背景，表示工具执行成功返回了结果 */
+.tool-result-block {
+  border-left: 3px solid hsl(142 76% 36%);
+  background: color-mix(in srgb, hsl(142 76% 36%) 5%, transparent);
+  padding: 0.75rem;
+  border-radius: 0.375rem;
+  margin: 0.25rem 0;
+}
+
+/** 工具结果错误状态：覆盖为红色左边框 + 淡红色背景，突出显示错误 */
+.tool-result-error {
+  border-left-color: hsl(0 84.2% 60.2%);
+  background: color-mix(in srgb, hsl(0 84.2% 60.2%) 5%, transparent);
+}
+
+/** 思考过程块：虚线左边框 + 淡灰色背景，暗示这是 AI 的内部推理，非最终输出 */
+.thinking-block {
+  border-left: 3px dashed var(--color-muted-foreground);
+  background: color-mix(in srgb, var(--color-muted) 50%, transparent);
+  padding: 0.75rem;
+  border-radius: 0.375rem;
+  margin: 0.25rem 0;
+  opacity: 0.85;
+}
+
+/** 图片内容块：居中展示，限制最大宽度防止大图撑爆布局 */
+.image-block {
+  margin: 0.5rem 0;
+}
+
+.image-block img {
+  max-height: 400px;
+  object-fit: contain;
+}
+
+/**
+ * 可折叠内容块的标题栏样式
+ * 应用于 <details> 元素的 <summary>，提供统一的交互反馈
+ */
+details.content-block > summary {
+  padding: 0.25rem 0;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  list-style: none;
+}
+
+/** 隐藏默认的三角形展开指示器（WebKit 浏览器） */
+details.content-block > summary::-webkit-details-marker {
+  display: none;
+}
+
+/** 展开状态下的 summary 底部加细分隔线 */
+details.content-block[open] > summary {
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--color-border);
+}

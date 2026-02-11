@@ -7,6 +7,7 @@
 import { useState, useRef, useEffect } from 'react';
 import type { SessionMessage, Session } from '../types/claude';
 import { getMessageText, formatTimestamp } from '../utils/claudeData';
+import { MessageBlockList } from './MessageBlockList';
 
 /**
  * ChatView 组件的属性接口
@@ -302,11 +303,9 @@ export function ChatView({
                   </div>
                 </div>
               ) : (
-                /* 只读模式：以预格式化文本展示消息内容 */
+                /* 只读模式：通过 MessageBlockList 渲染所有类型的内容块 */
                 <div className="prose prose-sm dark:prose-invert max-w-none">
-                  <pre className="whitespace-pre-wrap break-words text-sm font-sans">
-                    {getMessageText(msg)}
-                  </pre>
+                  <MessageBlockList message={msg} />
                 </div>
               )}
 
