@@ -112,9 +112,7 @@ export function MessageContentRenderer({ block }: MessageContentRendererProps) {
           <summary className="cursor-pointer select-none text-sm">
             &#128161; 思考过程
           </summary>
-          <pre className="whitespace-pre-wrap break-words text-sm font-sans mt-2 italic opacity-70">
-            {block.thinking || block.text || ''}
-          </pre>
+          <pre className="whitespace-pre-wrap break-words text-sm font-sans mt-2 italic opacity-70">{block.thinking || block.text || ''}</pre>
         </details>
       );
 
