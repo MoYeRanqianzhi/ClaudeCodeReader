@@ -23,6 +23,8 @@ interface ChatViewProps {
   onDeleteMessage: (uuid: string) => void;
   /** 刷新当前会话数据的回调函数 */
   onRefresh: () => void;
+  /** 导出会话的回调函数，接收导出格式 */
+  onExport: (format: 'markdown' | 'json') => void;
   /** 多选模式是否开启 */
   selectionMode: boolean;
   /** 当前已选中的消息 UUID 集合 */
@@ -62,6 +64,7 @@ export function ChatView({
   onEditMessage,
   onDeleteMessage,
   onRefresh,
+  onExport,
   selectionMode,
   selectedMessages,
   onToggleSelect,
@@ -279,6 +282,28 @@ export function ChatView({
             <option value="user">仅用户</option>
             <option value="assistant">仅助手</option>
           </select>
+
+          {/* 导出按钮：Markdown */}
+          <button
+            onClick={() => onExport('markdown')}
+            className="p-2 rounded-lg hover:bg-accent transition-colors"
+            title="导出为 Markdown"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+          </button>
+
+          {/* 导出按钮：JSON */}
+          <button
+            onClick={() => onExport('json')}
+            className="p-2 rounded-lg hover:bg-accent transition-colors"
+            title="导出为 JSON"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+            </svg>
+          </button>
 
           {/* 刷新按钮 */}
           <button

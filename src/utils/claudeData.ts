@@ -547,6 +547,61 @@ export async function editMessageContent(
   return updated;
 }
 
+// ============ 导出功能 ============
+
+/**
+ * 将会话消息导出为 Markdown 格式字符串
+ *
+ * 生成结构化的 Markdown 文档，包含会话标题和每条消息的角色、时间戳和内容。
+ * 仅导出 user 和 assistant 类型的消息，忽略系统消息。
+ *
+ * @param messages - 要导出的消息列表
+ * @param sessionName - 会话名称，用作文档标题
+ * @returns Markdown 格式的字符串
+ */
+export function exportAsMarkdown(messages: SessionMessage[], sessionName: string): string {
+  const lines: string[] = [];
+  lines.push(`# ${sessionName}`);
+  lines.push('');
+  lines.push(`导出时间: ${new Date().toLocaleString('zh-CN')}`);
+  lines.push('');
+  lines.push('---');
+  lines.push('');
+
+  for (const msg of messages) {
+    // 仅导出用户和助手消息
+    if (msg.type !== 'user' && msg.type !== 'assistant') continue;
+
+    const role = msg.type === 'user' ? '用户' : '助手';
+    const time = formatTimestamp(msg.timestamp);
+    lines.push(`## ${role} (${time})`);
+    lines.push('');
+
+    const text = getMessageText(msg);
+    if (text) {
+      lines.push(text);
+    }
+    lines.push('');
+    lines.push('---');
+    lines.push('');
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * 将会话消息导出为 JSON 格式字符串
+ *
+ * 直接将消息数组序列化为美化的 JSON 字符串，保留所有字段和结构信息。
+ * 适用于需要完整数据的场景（如数据迁移或深度分析）。
+ *
+ * @param messages - 要导出的消息列表
+ * @returns 美化后的 JSON 字符串（2 空格缩进）
+ */
+export function exportAsJson(messages: SessionMessage[]): string {
+  return JSON.stringify(messages, null, 2);
+}
+
 // ============ 格式化工具 ============
 
 /**

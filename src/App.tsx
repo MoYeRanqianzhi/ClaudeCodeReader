@@ -27,6 +27,8 @@ import {
   deleteMessages,
   editMessageContent,
   deleteSession,
+  exportAsMarkdown,
+  exportAsJson,
   readEnvSwitcherConfig,
   saveEnvSwitcherConfig,
   applyEnvProfile,
@@ -325,6 +327,50 @@ function App() {
   );
 
   /**
+   * 处理会话导出事件
+   *
+   * 将当前会话的消息导出为指定格式（Markdown 或 JSON），
+   * 使用 @tauri-apps/plugin-dialog 的 save() 弹出文件保存对话框让用户选择保存路径，
+   * 然后通过 @tauri-apps/plugin-fs 的 writeTextFile() 写入文件。
+   *
+   * @param format - 导出格式：'markdown' 或 'json'
+   */
+  const handleExport = useCallback(
+    async (format: 'markdown' | 'json') => {
+      if (!currentSession || messages.length === 0) return;
+      try {
+        const { save } = await import('@tauri-apps/plugin-dialog');
+        const { writeTextFile } = await import('@tauri-apps/plugin-fs');
+
+        const sessionName = currentSession.name || currentSession.id.substring(0, 8);
+        const extension = format === 'markdown' ? 'md' : 'json';
+        const content = format === 'markdown'
+          ? exportAsMarkdown(messages, sessionName)
+          : exportAsJson(messages);
+
+        // 弹出系统文件保存对话框
+        const filePath = await save({
+          defaultPath: `${sessionName}.${extension}`,
+          filters: [
+            {
+              name: format === 'markdown' ? 'Markdown' : 'JSON',
+              extensions: [extension],
+            },
+          ],
+        });
+
+        // 用户取消保存时 filePath 为 null
+        if (filePath) {
+          await writeTextFile(filePath, content);
+        }
+      } catch (err) {
+        console.error('导出会话失败:', err);
+      }
+    },
+    [currentSession, messages]
+  );
+
+  /**
    * 处理设置保存事件
    *
    * 将更新后的设置对象保存到 ~/.claude/settings.json 文件，并更新本地状态。
@@ -546,6 +592,7 @@ function App() {
         onEditMessage={handleEditMessage}
         onDeleteMessage={handleDeleteMessage}
         onRefresh={handleRefresh}
+        onExport={handleExport}
         selectionMode={selectionMode}
         selectedMessages={selectedMessages}
         onToggleSelect={handleToggleSelect}
