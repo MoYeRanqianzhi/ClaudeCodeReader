@@ -56,8 +56,10 @@ jobs:
       release_name: ${{ steps.release_type.outputs.release_name }}
       # 预发布构建的时间戳（仅预发布使用）
       timestamp: ${{ steps.release_type.outputs.timestamp }}
-      # 从 package.json 提取的应用版本号
+      # 从 package.json 提取的应用版本号（不含构建后缀）
       app_version: ${{ steps.version.outputs.version }}
+      # 用于产物文件命名的版本号（预发布时包含 +build.TIMESTAMP 后缀）
+      artifact_version: ${{ steps.release_type.outputs.artifact_version }}
       # 自动生成的变更日志内容
       changelog: ${{ steps.changelog.outputs.log }}
 
@@ -93,6 +95,8 @@ jobs:
             echo "is_release=true" >> "$GITHUB_OUTPUT"
             echo "tag_name=$TAG_NAME" >> "$GITHUB_OUTPUT"
             echo "release_name=ClaudeCodeReader ${APP_VERSION}" >> "$GITHUB_OUTPUT"
+            # 正式发布：产物版本号与应用版本号一致
+            echo "artifact_version=${APP_VERSION}" >> "$GITHUB_OUTPUT"
             echo "Release type: RELEASE (tag=$TAG_NAME, version=$APP_VERSION)"
           else
             # ---- 预发布：普通分支推送 ----
@@ -104,6 +108,8 @@ jobs:
             echo "tag_name=build-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
             echo "release_name=Pre-release ${APP_VERSION}+build.${TIMESTAMP}" >> "$GITHUB_OUTPUT"
             echo "timestamp=$TIMESTAMP" >> "$GITHUB_OUTPUT"
+            # 预发布：产物版本号附加 +build.TIMESTAMP 后缀，用于区分不同构建
+            echo "artifact_version=${APP_VERSION}+build.${TIMESTAMP}" >> "$GITHUB_OUTPUT"
             echo "Release type: PRE-RELEASE (sha=$SHORT_SHA, version=$APP_VERSION, timestamp=$TIMESTAMP)"
           fi
 
@@ -294,47 +300,59 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      # Tauri 官方 GitHub Action：构建应用并自动上传 .msi/.dmg/.deb/.AppImage 等到 Release
+      # Tauri 官方 GitHub Action：仅执行构建，不自动上传到 Release。
+      # 构建完成后由后续步骤统一重命名产物（预发布时添加 +build.TIMESTAMP 后缀）再上传。
       - name: Build Tauri
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          releaseId: ${{ needs.create-release.outputs.release_id }}
           args: ${{ matrix.args }}
 
-      # ---- Windows 额外步骤：上传独立 .exe 二进制文件 ----
-      # 除了 NSIS 安装器外，额外上传一份独立的 .exe 文件，
-      # 供 NPM postinstall 脚本直接下载使用（无需安装）
-      - name: Upload Windows binary
-        if: matrix.platform == 'windows-latest'
-        run: |
-          # 使用从 package.json 提取的版本号（而非 Git tag，以兼容预发布场景）
-          VERSION="${{ needs.prepare.outputs.app_version }}"
-          cp src-tauri/target/release/claude-code-reader.exe "ClaudeCodeReader_${VERSION}_x64.exe"
+      # 构建后统一处理：收集所有产物、重命名版本号、上传到 Release。
+      # 预发布时将文件名中的 app_version 替换为 artifact_version（含 +build.TIMESTAMP），
+      # 正式发布时两者相同，重命名为无操作。
+      # 同时处理各平台的额外产物（Windows 独立 .exe、macOS .app.tar.gz）。
+      - name: Collect and rename artifacts
         shell: bash
-      - name: Upload Windows binary to release
-        if: matrix.platform == 'windows-latest'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.prepare.outputs.tag_name }}
-          files: ClaudeCodeReader_*_x64.exe
-
-      # ---- macOS 额外步骤：打包 .app 为 tar.gz 并上传 ----
-      # macOS 的 .app 是一个目录结构（应用束），需要打包为 tar.gz 才能作为单文件分发。
-      # NPM postinstall 脚本会下载此 tar.gz 并在本地解压。
-      - name: Upload macOS binary
-        if: matrix.platform == 'macos-latest'
         run: |
-          VERSION="${{ needs.prepare.outputs.app_version }}"
-          cd src-tauri/target/${{ matrix.target }}/release/bundle/macos
-          tar -czvf ClaudeCodeReader_${VERSION}_${{ matrix.target }}.app.tar.gz ClaudeCodeReader.app
-      - name: Upload macOS binary to release
-        if: matrix.platform == 'macos-latest'
+          APP_VERSION="${{ needs.prepare.outputs.app_version }}"
+          ARTIFACT_VERSION="${{ needs.prepare.outputs.artifact_version }}"
+          mkdir -p upload
+
+          # 遍历 bundle 目录下所有构建产物，重命名后复制到 upload 目录
+          find src-tauri/target -path '*/bundle/*' -type f \
+            \( -name '*.exe' -o -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.sig' \) \
+            | while read -r f; do
+              BASENAME=$(basename "$f")
+              NEW_NAME="${BASENAME//$APP_VERSION/$ARTIFACT_VERSION}"
+              cp "$f" "upload/$NEW_NAME"
+              echo "Collected: $BASENAME -> $NEW_NAME"
+            done
+
+          # Windows 额外产物：复制独立 .exe 二进制文件（供 NPM postinstall 直接下载）
+          if [ -f "src-tauri/target/release/claude-code-reader.exe" ]; then
+            cp src-tauri/target/release/claude-code-reader.exe "upload/ClaudeCodeReader_${ARTIFACT_VERSION}_x64.exe"
+            echo "Collected: standalone Windows exe"
+          fi
+
+          # macOS 额外产物：将 .app 目录打包为 tar.gz（供 NPM postinstall 下载解压）
+          TARGET="${{ matrix.target }}"
+          if [ -n "$TARGET" ] && [ -d "src-tauri/target/${TARGET}/release/bundle/macos/ClaudeCodeReader.app" ]; then
+            cd "src-tauri/target/${TARGET}/release/bundle/macos"
+            tar -czvf "${GITHUB_WORKSPACE}/upload/ClaudeCodeReader_${ARTIFACT_VERSION}_${TARGET}.app.tar.gz" ClaudeCodeReader.app
+            cd "${GITHUB_WORKSPACE}"
+            echo "Collected: macOS .app.tar.gz for ${TARGET}"
+          fi
+
+          echo "=== Upload directory ==="
+          ls -la upload/
+
+      - name: Upload artifacts to release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.prepare.outputs.tag_name }}
-          files: src-tauri/target/${{ matrix.target }}/release/bundle/macos/ClaudeCodeReader_*_${{ matrix.target }}.app.tar.gz
+          files: upload/*
 
   # ===========================================================================
   # Job 4: 发布 NPM 包
