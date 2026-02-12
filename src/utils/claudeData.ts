@@ -44,7 +44,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core';
-import type { ClaudeSettings, Project, Session, SessionMessage, HistoryEntry, EnvSwitcherConfig, EnvProfile } from '../types/claude';
+import type { ClaudeSettings, Project, SessionMessage, HistoryEntry, EnvSwitcherConfig, EnvProfile } from '../types/claude';
 
 // ============ 路径工具函数 ============
 
