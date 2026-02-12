@@ -89,6 +89,8 @@ export function ChatView({
   const [searchQuery, setSearchQuery] = useState('');
   /** 消息列表底部的哨兵元素引用，用于自动滚动定位 */
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  /** 标记当前会话是否为首次加载消息，首次时使用瞬间跳转而非平滑滚动 */
+  const isInitialLoadRef = useRef(true);
 
   /**
    * 根据当前过滤器和搜索关键词筛选消息列表。
@@ -138,16 +140,26 @@ export function ChatView({
   }, [messages]);
 
   /**
-   * 平滑滚动到消息列表底部。
-   * 通过 scrollIntoView 将底部哨兵元素滚入可视区域。
+   * 滚动到消息列表底部。
+   * 根据是否为首次加载选择不同的滚动行为：
+   * - 首次加载会话时使用 'instant'（瞬间跳转），避免用户看到从顶部滑到底部的动画
+   * - 后续消息更新时使用 'smooth'（平滑滚动），提供流畅的视觉体验
    */
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  const scrollToBottom = (instant = false) => {
+    messagesEndRef.current?.scrollIntoView({ behavior: instant ? 'instant' : 'smooth' });
   };
+
+  /** 当会话切换时，标记下一次消息变化为首次加载 */
+  useEffect(() => {
+    isInitialLoadRef.current = true;
+  }, [session]);
 
   /** 当消息列表发生变化时，自动滚动到底部以展示最新消息 */
   useEffect(() => {
-    scrollToBottom();
+    if (messages.length > 0) {
+      scrollToBottom(isInitialLoadRef.current);
+      isInitialLoadRef.current = false;
+    }
   }, [messages]);
 
   /**
@@ -391,7 +403,7 @@ export function ChatView({
 
           {/* 滚动到底部 */}
           <button
-            onClick={scrollToBottom}
+            onClick={() => scrollToBottom()}
             className="p-2 rounded-lg hover:bg-accent transition-colors"
             title="滚动到底部"
           >
