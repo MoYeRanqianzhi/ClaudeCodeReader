@@ -24,3 +24,7 @@ tauri-plugin-log = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-shell = "2"
+# 异步文件 I/O：利用 Tauri 自带的 tokio runtime 进行并行文件扫描
+tokio = { version = "1", features = ["fs", "rt"] }
+# 跨平台主目录获取：用于定位 ~/.claude/ 和 ~/.mo/CCR/ 目录
+dirs = "6"
