@@ -173,7 +173,8 @@ jobs:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
       # ---- 正式版 Release ----
-      # Tag 推送或手动触发时创建，标记为最新正式版，启用自动生成 Release Notes
+      # 所有 v* tag 推送或手动触发时创建，一律标记为正式版（包括 beta/alpha）。
+      # beta/alpha 版本仅在 NPM 发布时使用 --tag beta 区分，GitHub Release 不做预发布标记。
       - name: Create Release
         if: needs.prepare.outputs.is_release == 'true'
         id: create_release
@@ -182,7 +183,7 @@ jobs:
           tag_name: ${{ needs.prepare.outputs.tag_name }}
           name: ${{ needs.prepare.outputs.release_name }}
           draft: false
-          prerelease: ${{ contains(needs.prepare.outputs.tag_name, 'beta') || contains(needs.prepare.outputs.tag_name, 'alpha') }}
+          prerelease: false
           generate_release_notes: true
           body: |
             ## ClaudeCodeReader ${{ needs.prepare.outputs.app_version }}
