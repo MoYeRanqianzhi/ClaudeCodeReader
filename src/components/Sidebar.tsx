@@ -2,9 +2,12 @@
  * @file Sidebar.tsx - 侧边栏导航组件
  * @description 应用左侧的主导航面板，负责项目与会话的层级浏览、搜索过滤、
  *              环境配置切换以及设置入口。采用可折叠的树形结构展示项目和会话。
+ *              使用 lucide-react 图标库替代内联 SVG，使用 motion/react 提供流畅的动画过渡效果。
  */
 
 import { useState } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
+import { Settings, ChevronLeft, Search, ChevronRight, Trash2 } from 'lucide-react';
 import type { Project, Session, EnvProfile, EnvSwitcherConfig } from '../types/claude';
 import { formatTimestamp } from '../utils/claudeData';
 import { EnvSwitcher } from './EnvSwitcher';
@@ -49,6 +52,7 @@ interface SidebarProps {
  * - 搜索过滤：支持按项目路径或会话 ID 进行模糊搜索
  * - 环境配置切换：集成 EnvSwitcher 组件，可快速切换不同的环境配置
  * - 底部统计：显示项目总数和会话总数
+ * - 动画过渡：使用 motion/react 实现平滑的展开/折叠、悬停和点击动画
  *
  * @param props - 组件属性
  * @returns JSX 元素
@@ -100,33 +104,39 @@ export function Sidebar({
   };
 
   return (
-    <div className="w-72 h-full flex flex-col bg-card border-r border-border">
-      {/* 头部区域：应用标题和设置按钮 */}
-      <div className="p-4 border-b border-border">
+    /* 根容器：使用 motion.div 实现侧边栏展开/收起的宽度动画 */
+    <motion.div
+      className="w-72 h-full flex flex-col bg-sidebar border-r border-border custom-scrollbar overflow-hidden"
+      initial={false}
+      animate={{ width: 288 }}
+      exit={{ width: 0, opacity: 0 }}
+      transition={{ duration: 0.2, ease: [0.4, 0, 0.2, 1] }}
+    >
+      {/* 头部区域：应用标题和设置按钮，设置 shrink-0 防止在空间不足时被压缩 */}
+      <div className="p-4 border-b border-border shrink-0">
         <div className="flex items-center justify-between mb-3">
           <h1 className="text-lg font-semibold text-foreground">Claude Code Reader</h1>
           <div className="flex items-center gap-1">
-            {/* 设置按钮 */}
-            <button
+            {/* 设置按钮：使用 motion.button 添加悬停缩放和点击回弹效果 */}
+            <motion.button
               onClick={onOpenSettings}
               className="p-2 rounded-lg hover:bg-accent transition-colors"
               title="设置"
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
             >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-              </svg>
-            </button>
-            {/* 折叠侧边栏按钮 */}
-            <button
+              <Settings className="w-5 h-5" />
+            </motion.button>
+            {/* 折叠侧边栏按钮：使用 motion.button 添加悬停缩放和点击回弹效果 */}
+            <motion.button
               onClick={onCollapse}
               className="p-2 rounded-lg hover:bg-accent transition-colors"
               title="折叠侧边栏"
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
             >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
-              </svg>
-            </button>
+              <ChevronLeft className="w-5 h-5" />
+            </motion.button>
           </div>
         </div>
 
@@ -141,22 +151,15 @@ export function Sidebar({
           />
         </div>
 
-        {/* 搜索框：支持按项目路径或会话 ID 模糊搜索 */}
+        {/* 搜索框：使用 lucide-react 的 Search 图标替代内联 SVG */}
         <div className="relative">
-          <svg
-            className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-muted-foreground"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-          </svg>
+          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-muted-foreground" />
           <input
             type="text"
             placeholder="搜索项目或会话..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-10 pr-4 py-2 rounded-lg bg-secondary text-foreground placeholder-muted-foreground border border-border focus:outline-none focus:ring-2 focus:ring-ring"
+            className="w-full pl-10 pr-4 py-2 rounded-lg bg-muted text-sm text-foreground placeholder-muted-foreground border border-border focus:outline-none focus:ring-2 focus:ring-ring"
           />
         </div>
       </div>
@@ -170,8 +173,8 @@ export function Sidebar({
         ) : (
           filteredProjects.map((project) => (
             <div key={project.path} className="border-b border-border">
-              {/* 项目头：点击后选中项目并展开/折叠其会话列表 */}
-              <button
+              {/* 项目头：使用 motion.button 添加悬停和点击动画，点击后选中项目并展开/折叠其会话列表 */}
+              <motion.button
                 onClick={() => {
                   onSelectProject(project);
                   toggleProject(project.path);
@@ -179,71 +182,80 @@ export function Sidebar({
                 className={`w-full p-3 text-left hover:bg-accent transition-colors flex items-center gap-2 ${
                   currentProject?.path === project.path ? 'bg-accent' : ''
                 }`}
+                whileHover={{ backgroundColor: 'var(--accent)' }}
+                whileTap={{ scale: 0.98 }}
               >
-                <svg
-                  className={`w-4 h-4 transition-transform ${
-                    expandedProjects.has(project.path) ? 'rotate-90' : ''
-                  }`}
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
+                {/* 展开/折叠指示箭头：使用 motion.div 实现平滑的旋转动画 */}
+                <motion.div
+                  animate={{ rotate: expandedProjects.has(project.path) ? 90 : 0 }}
+                  transition={{ duration: 0.15, ease: 'easeInOut' }}
                 >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                </svg>
+                  <ChevronRight className="w-4 h-4" />
+                </motion.div>
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-medium text-foreground truncate">
                     {project.path.split('\\').pop() || project.path}
                   </div>
                   <div className="text-xs text-muted-foreground truncate">{project.path}</div>
                 </div>
-                <span className="text-xs bg-secondary px-2 py-1 rounded-full text-muted-foreground">
+                {/* 会话计数徽章：使用 bg-muted 替代 bg-secondary 保持与整体风格一致 */}
+                <span className="text-xs bg-muted px-2 py-1 rounded-full text-muted-foreground">
                   {project.sessions.length}
                 </span>
-              </button>
+              </motion.button>
 
-              {/* 会话列表 */}
-              {expandedProjects.has(project.path) && (
-                <div className="bg-muted/30">
-                  {project.sessions.map((session) => (
-                    <div
-                      key={session.id}
-                      className={`group relative w-full p-3 pl-8 text-left hover:bg-accent transition-colors cursor-pointer ${
-                        currentSession?.id === session.id ? 'bg-accent' : ''
-                      }`}
-                      onClick={() => onSelectSession(session)}
-                    >
-                      <div className="text-sm text-foreground truncate pr-6">
-                        {session.name || session.id.substring(0, 8)}
-                      </div>
-                      <div className="text-xs text-muted-foreground">
-                        {formatTimestamp(session.timestamp)}
-                      </div>
-                      {/* 删除按钮：hover 时显示，阻止事件冒泡防止触发会话选择 */}
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onDeleteSession(session.filePath);
-                        }}
-                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-destructive/10 text-destructive transition-all"
-                        title="删除会话"
+              {/* 会话列表：使用 AnimatePresence 包裹，实现展开/折叠的高度动画过渡 */}
+              <AnimatePresence initial={false}>
+                {expandedProjects.has(project.path) && (
+                  <motion.div
+                    className="bg-muted/30"
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: 'auto', opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    transition={{ duration: 0.2, ease: [0.4, 0, 0.2, 1] }}
+                    style={{ overflow: 'hidden' }}
+                  >
+                    {project.sessions.map((session) => (
+                      <div
+                        key={session.id}
+                        className={`group relative w-full p-3 pl-10 text-left hover:bg-accent transition-colors cursor-pointer ${
+                          currentSession?.id === session.id ? 'bg-accent border-l-2 border-primary' : ''
+                        }`}
+                        onClick={() => onSelectSession(session)}
                       >
-                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                        </svg>
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
+                        <div className="text-sm text-foreground truncate pr-6">
+                          {session.name || session.id.substring(0, 8)}
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          {formatTimestamp(session.timestamp)}
+                        </div>
+                        {/* 删除按钮：使用 motion.button 添加悬停/点击效果，hover 时显示，阻止事件冒泡防止触发会话选择 */}
+                        <motion.button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onDeleteSession(session.filePath);
+                          }}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-destructive/10 text-destructive transition-all"
+                          title="删除会话"
+                          whileHover={{ scale: 1.1 }}
+                          whileTap={{ scale: 0.9 }}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </motion.button>
+                      </div>
+                    ))}
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
           ))
         )}
       </div>
 
-      {/* 底部信息 */}
-      <div className="p-3 border-t border-border text-xs text-muted-foreground">
+      {/* 底部信息：设置 shrink-0 防止在空间不足时被压缩 */}
+      <div className="p-3 border-t border-border text-xs text-muted-foreground shrink-0">
         共 {projects.length} 个项目，{projects.reduce((acc, p) => acc + p.sessions.length, 0)} 个会话
       </div>
-    </div>
+    </motion.div>
   );
 }

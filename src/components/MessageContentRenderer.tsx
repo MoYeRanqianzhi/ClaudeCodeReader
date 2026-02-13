@@ -13,8 +13,12 @@
  * - 每种内容类型使用独立的视觉样式（颜色、边框、图标）便于区分
  * - 工具调用和思考过程默认折叠，减少视觉噪音
  * - 工具结果支持递归渲染嵌套的 MessageContent 数组
+ * - 使用 motion/react 为各内容块添加进入动画，提升视觉流畅度
+ * - 使用 lucide-react 图标替代内联 emoji，保证跨平台一致性
  */
 
+import { motion } from 'motion/react';
+import { Wrench, CheckCircle2, XCircle, Lightbulb } from 'lucide-react';
 import type { MessageContent } from '../types/claude';
 
 /**
@@ -29,11 +33,11 @@ interface MessageContentRendererProps {
  * MessageContentRenderer - 单个消息内容块的渲染组件
  *
  * 根据 block.type 分发到不同的渲染逻辑，每种类型都有独特的视觉样式：
- * - text: 保留空白符的预格式化文本
- * - tool_use: 蓝色左边框 + 可折叠的 JSON 参数面板
- * - tool_result: 绿色左边框（错误时为红色）+ 支持嵌套内容递归
- * - thinking: 虚线左边框 + 默认折叠 + 斜体淡色文字
- * - image: 带圆角的内联图片展示
+ * - text: 保留空白符的预格式化文本，带淡入上移动画
+ * - tool_use: 蓝色左边框 + 可折叠的 JSON 参数面板，带缩放淡入动画
+ * - tool_result: 绿色左边框（错误时为红色）+ 支持嵌套内容递归，带左滑淡入动画
+ * - thinking: 虚线左边框 + 默认折叠 + 斜体淡色文字，带缩放动画
+ * - image: 带圆角和阴影的内联图片展示，带缩放淡入动画
  *
  * @param props - 包含待渲染的内容块对象
  * @returns 渲染后的 JSX 元素
@@ -43,18 +47,28 @@ export function MessageContentRenderer({ block }: MessageContentRendererProps) {
     /* ====== 文本内容块 ====== */
     case 'text':
       return (
-        <pre className="whitespace-pre-wrap break-words text-sm font-sans">
+        <motion.pre
+          className="whitespace-pre-wrap break-words text-sm font-sans"
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.2 }}
+        >
           {block.text || ''}
-        </pre>
+        </motion.pre>
       );
 
     /* ====== 工具调用块 ====== */
     case 'tool_use':
       return (
-        <details className="tool-use-block content-block">
+        <motion.details
+          className="tool-use-block content-block"
+          initial={{ opacity: 0, scale: 0.98 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ duration: 0.2 }}
+        >
           <summary className="cursor-pointer select-none">
             {/* 工具图标 + 名称 */}
-            <span className="tool-use-icon">&#128295;</span>
+            <Wrench className="w-4 h-4 inline-block shrink-0" />
             <span className="font-medium">{block.name || '未知工具'}</span>
             {/* 工具调用 ID 简短显示 */}
             {block.id && (
@@ -65,11 +79,16 @@ export function MessageContentRenderer({ block }: MessageContentRendererProps) {
           </summary>
           {/* 工具输入参数的 JSON 展示 */}
           {block.input && (
-            <pre className="code-block mt-2 text-xs overflow-x-auto">
+            <motion.pre
+              className="code-block mt-2 text-xs overflow-x-auto custom-scrollbar"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: 0.15, delay: 0.05 }}
+            >
               {JSON.stringify(block.input, null, 2)}
-            </pre>
+            </motion.pre>
           )}
-        </details>
+        </motion.details>
       );
 
     /* ====== 工具结果块 ====== */
@@ -77,10 +96,21 @@ export function MessageContentRenderer({ block }: MessageContentRendererProps) {
       /* 根据 is_error 字段动态选择样式类 */
       const resultClass = block.is_error ? 'tool-result-block tool-result-error' : 'tool-result-block';
       return (
-        <div className={resultClass}>
-          {/* 结果头部标签 */}
-          <div className="text-xs font-medium mb-1 opacity-70">
-            {block.is_error ? '&#10060; 工具执行失败' : '&#9989; 工具结果'}
+        <motion.div
+          className={resultClass}
+          initial={{ opacity: 0, x: -10 }}
+          animate={{ opacity: 1, x: 0 }}
+          transition={{ duration: 0.2 }}
+        >
+          {/* 结果头部标签 —— 使用 flex 布局对齐图标和文字 */}
+          <div className="flex items-center gap-1 text-xs font-medium mb-1 opacity-70">
+            {block.is_error ? (
+              /* 错误状态：红色叉号图标 */
+              <><XCircle className="w-3.5 h-3.5 shrink-0" /> 工具执行失败</>
+            ) : (
+              /* 成功状态：绿色勾号图标 */
+              <><CheckCircle2 className="w-3.5 h-3.5 shrink-0" /> 工具结果</>
+            )}
             {/* 显示关联的工具调用 ID */}
             {block.tool_use_id && (
               <span className="text-xs text-muted-foreground ml-2">
@@ -90,7 +120,7 @@ export function MessageContentRenderer({ block }: MessageContentRendererProps) {
           </div>
           {/* 渲染工具结果内容：支持字符串和嵌套 MessageContent[] 两种格式 */}
           {typeof block.content === 'string' ? (
-            <pre className="whitespace-pre-wrap break-words text-xs">
+            <pre className="whitespace-pre-wrap break-words text-xs custom-scrollbar">
               {block.content}
             </pre>
           ) : Array.isArray(block.content) ? (
@@ -101,19 +131,33 @@ export function MessageContentRenderer({ block }: MessageContentRendererProps) {
               ))}
             </div>
           ) : null}
-        </div>
+        </motion.div>
       );
     }
 
     /* ====== 思考过程块 ====== */
     case 'thinking':
       return (
-        <details className="thinking-block content-block">
+        <motion.details
+          className="thinking-block content-block"
+          initial={{ opacity: 0, scale: 0.98 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ duration: 0.2 }}
+        >
           <summary className="cursor-pointer select-none text-sm">
-            &#128161; 思考过程
+            {/* 灯泡图标 —— 表示 AI 思考过程 */}
+            <Lightbulb className="w-4 h-4 inline-block shrink-0" /> 思考过程
           </summary>
-          <pre className="whitespace-pre-wrap break-words text-sm font-sans mt-2 italic opacity-70">{block.thinking || block.text || ''}</pre>
-        </details>
+          {/* 思考内容：斜体淡色，保留空白符 */}
+          <motion.pre
+            className="whitespace-pre-wrap break-words text-sm font-sans mt-2 italic opacity-70 custom-scrollbar"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: 0.15, delay: 0.05 }}
+          >
+            {block.thinking || block.text || ''}
+          </motion.pre>
+        </motion.details>
       );
 
     /* ====== 图片内容块 ====== */
@@ -122,14 +166,19 @@ export function MessageContentRenderer({ block }: MessageContentRendererProps) {
         /* 通过 Base64 数据构造 data URI */
         const dataUri = `data:${block.source.media_type};base64,${block.source.data}`;
         return (
-          <div className="image-block">
+          <motion.div
+            className="image-block"
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ duration: 0.25 }}
+          >
             <img
               src={dataUri}
               alt="消息图片"
-              className="max-w-full rounded-lg"
+              className="max-w-full rounded-lg shadow-sm"
               loading="lazy"
             />
-          </div>
+          </motion.div>
         );
       }
       /* 图片数据缺失时的降级显示 */

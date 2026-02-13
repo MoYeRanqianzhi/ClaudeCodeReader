@@ -2,9 +2,18 @@
  * @file ChatView.tsx - 聊天视图组件
  * @description 负责展示单个会话的完整聊天记录，支持消息浏览、过滤、编辑、删除、
  *              复制和多选批量操作等功能。是应用的核心内容区域，占据主界面的右侧大部分空间。
+ *
+ *              UI 层采用 motion/react 实现流畅动画效果，使用 lucide-react 图标库
+ *              替代内联 SVG，以提升一致性和可维护性。
  */
 
 import { useState, useRef, useEffect, useMemo } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
+import {
+  ChevronRight, Search, X, CheckSquare, Square, Filter,
+  Download, FileText, FileJson, RefreshCw, ArrowDown,
+  Copy, Edit2, Trash2, MessageSquare, Bot, User
+} from 'lucide-react';
 import type { SessionMessage, Session } from '../types/claude';
 import { getMessageText, formatTimestamp } from '../utils/claudeData';
 import { MessageBlockList } from './MessageBlockList';
@@ -87,10 +96,39 @@ export function ChatView({
   const [filter, setFilter] = useState<'all' | 'user' | 'assistant'>('all');
   /** 搜索关键词：用于在消息文本中查找匹配内容，空字符串表示不搜索 */
   const [searchQuery, setSearchQuery] = useState('');
+  /** 控制过滤器下拉菜单的显示/隐藏状态 */
+  const [showFilterDropdown, setShowFilterDropdown] = useState(false);
+  /** 控制导出下拉菜单的显示/隐藏状态 */
+  const [showExportDropdown, setShowExportDropdown] = useState(false);
   /** 消息列表底部的哨兵元素引用，用于自动滚动定位 */
   const messagesEndRef = useRef<HTMLDivElement>(null);
   /** 标记当前会话是否为首次加载消息，首次时使用瞬间跳转而非平滑滚动 */
   const isInitialLoadRef = useRef(true);
+  /** 过滤器下拉菜单容器引用，用于检测外部点击以关闭下拉菜单 */
+  const filterRef = useRef<HTMLDivElement>(null);
+  /** 导出下拉菜单容器引用，用于检测外部点击以关闭下拉菜单 */
+  const exportRef = useRef<HTMLDivElement>(null);
+
+  /**
+   * 点击外部区域时自动关闭下拉菜单。
+   * 监听全局 mousedown 事件，如果点击目标不在下拉菜单容器内，
+   * 则关闭对应的下拉菜单。
+   */
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      /* 检测过滤器下拉菜单的外部点击 */
+      if (filterRef.current && !filterRef.current.contains(event.target as Node)) {
+        setShowFilterDropdown(false);
+      }
+      /* 检测导出下拉菜单的外部点击 */
+      if (exportRef.current && !exportRef.current.contains(event.target as Node)) {
+        setShowExportDropdown(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   /**
    * 根据当前过滤器和搜索关键词筛选消息列表。
@@ -211,32 +249,21 @@ export function ChatView({
         {/* 侧边栏折叠时在顶部显示展开按钮，否则用户无法恢复侧边栏 */}
         {sidebarCollapsed && (
           <div className="p-2 border-b border-border bg-card">
-            <button
+            <motion.button
               onClick={onExpandSidebar}
               className="p-2 rounded-lg hover:bg-accent transition-colors"
               title="展开侧边栏"
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
             >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" />
-              </svg>
-            </button>
+              <ChevronRight className="w-5 h-5" />
+            </motion.button>
           </div>
         )}
+        {/* 空状态引导：居中显示图标和提示文字 */}
         <div className="flex-1 flex items-center justify-center">
           <div className="text-center text-muted-foreground">
-            <svg
-              className="w-16 h-16 mx-auto mb-4 opacity-50"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={1.5}
-                d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
-              />
-            </svg>
+            <MessageSquare className="w-16 h-16 mx-auto mb-4 opacity-50" strokeWidth={1.5} />
             <p className="text-lg">选择一个会话来查看聊天记录</p>
           </div>
         </div>
@@ -247,46 +274,44 @@ export function ChatView({
   return (
     <div className="flex-1 flex flex-col bg-background">
       {/* 头部工具栏：显示会话标题、消息计数、过滤器、多选操作、刷新和滚动按钮 */}
-      <div className="p-4 border-b border-border flex items-center justify-between bg-card">
+      <div className="p-4 border-b border-border flex items-center justify-between bg-card shrink-0">
         <div className="flex items-center gap-3">
           {/* 侧边栏折叠时显示展开按钮 */}
           {sidebarCollapsed && (
-            <button
+            <motion.button
               onClick={onExpandSidebar}
               className="p-2 rounded-lg hover:bg-accent transition-colors"
               title="展开侧边栏"
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
             >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" />
-              </svg>
-            </button>
+              <ChevronRight className="w-5 h-5" />
+            </motion.button>
           )}
           <div>
-          <h2 className="text-lg font-semibold text-foreground">
-            会话: {session.name || session.id.substring(0, 8)}
-          </h2>
-          <p className="text-sm text-muted-foreground">
-            {formatTimestamp(session.timestamp)} ·{' '}
-            {searchQuery.trim() || filter !== 'all'
-              ? `显示 ${filteredMessages.length}/${totalMessages} 条消息`
-              : `${filteredMessages.length} 条消息`}
-            {/* Token 使用量汇总：仅在有统计数据时显示 */}
-            {tokenStats.inputTokens + tokenStats.outputTokens > 0 && (
-              <span className="ml-2">
-                · 输入: {tokenStats.inputTokens.toLocaleString()} · 输出: {tokenStats.outputTokens.toLocaleString()}
-                {tokenStats.cacheReadTokens > 0 && ` · 缓存读取: ${tokenStats.cacheReadTokens.toLocaleString()}`}
-                {tokenStats.cacheCreationTokens > 0 && ` · 缓存创建: ${tokenStats.cacheCreationTokens.toLocaleString()}`}
-              </span>
-            )}
-          </p>
+            <h2 className="text-lg font-semibold text-foreground">
+              会话: {session.name || session.id.substring(0, 8)}
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              {formatTimestamp(session.timestamp)} ·{' '}
+              {searchQuery.trim() || filter !== 'all'
+                ? `显示 ${filteredMessages.length}/${totalMessages} 条消息`
+                : `${filteredMessages.length} 条消息`}
+              {/* Token 使用量汇总：仅在有统计数据时显示 */}
+              {tokenStats.inputTokens + tokenStats.outputTokens > 0 && (
+                <span className="ml-2">
+                  · 输入: {tokenStats.inputTokens.toLocaleString()} · 输出: {tokenStats.outputTokens.toLocaleString()}
+                  {tokenStats.cacheReadTokens > 0 && ` · 缓存读取: ${tokenStats.cacheReadTokens.toLocaleString()}`}
+                  {tokenStats.cacheCreationTokens > 0 && ` · 缓存创建: ${tokenStats.cacheCreationTokens.toLocaleString()}`}
+                </span>
+              )}
+            </p>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {/* 搜索输入框 */}
+          {/* 搜索输入框：带搜索图标和可选的清除按钮 */}
           <div className="relative">
-            <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-            </svg>
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <input
               type="text"
               value={searchQuery}
@@ -300,212 +325,301 @@ export function ChatView({
                 onClick={() => setSearchQuery('')}
                 className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
               >
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
+                <X className="w-3.5 h-3.5" />
               </button>
             )}
           </div>
 
-          {/* 选择模式切换按钮 */}
-          <button
+          {/* 选择模式切换按钮：激活时高亮显示 */}
+          <motion.button
             onClick={onToggleSelectionMode}
             className={`p-2 rounded-lg transition-colors ${
               selectionMode ? 'bg-primary text-primary-foreground' : 'hover:bg-accent'
             }`}
             title={selectionMode ? '退出选择模式' : '进入选择模式'}
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
-            </svg>
-          </button>
+            <CheckSquare className="w-5 h-5" />
+          </motion.button>
 
-          {/* 选择模式下的操作按钮组 */}
-          {selectionMode && (
-            <>
-              {/* 全选按钮 */}
-              <button
-                onClick={() => onSelectAll(filteredMessages.map(m => m.uuid))}
-                className="px-3 py-1.5 rounded-lg bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors text-sm"
-              >
-                全选
-              </button>
-              {/* 取消全选按钮 */}
-              <button
-                onClick={onDeselectAll}
-                className="px-3 py-1.5 rounded-lg bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors text-sm"
-              >
-                取消
-              </button>
-              {/* 批量删除按钮：显示已选数量，无选中时禁用 */}
-              <button
-                onClick={onDeleteSelected}
-                disabled={selectedMessages.size === 0}
-                className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${
-                  selectedMessages.size > 0
-                    ? 'bg-destructive text-destructive-foreground hover:bg-destructive/90'
-                    : 'bg-secondary text-muted-foreground cursor-not-allowed'
-                }`}
-              >
-                删除 ({selectedMessages.size})
-              </button>
-            </>
-          )}
+          {/* 选择模式下的操作按钮组：全选、取消、批量删除 */}
+          <AnimatePresence>
+            {selectionMode && (
+              <>
+                {/* 全选按钮 */}
+                <motion.button
+                  initial={{ opacity: 0, scale: 0.8 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.8 }}
+                  onClick={() => onSelectAll(filteredMessages.map(m => m.uuid))}
+                  className="px-3 py-1.5 rounded-lg bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors text-sm"
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                >
+                  全选
+                </motion.button>
+                {/* 取消全选按钮 */}
+                <motion.button
+                  initial={{ opacity: 0, scale: 0.8 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.8 }}
+                  onClick={onDeselectAll}
+                  className="px-3 py-1.5 rounded-lg bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors text-sm"
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                >
+                  取消
+                </motion.button>
+                {/* 批量删除按钮：显示已选数量，无选中时禁用 */}
+                <motion.button
+                  initial={{ opacity: 0, scale: 0.8 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.8 }}
+                  onClick={onDeleteSelected}
+                  disabled={selectedMessages.size === 0}
+                  className={`px-3 py-1.5 rounded-lg text-sm transition-colors flex items-center gap-1.5 ${
+                    selectedMessages.size > 0
+                      ? 'bg-destructive text-destructive-foreground hover:bg-destructive/90'
+                      : 'bg-secondary text-muted-foreground cursor-not-allowed'
+                  }`}
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                >
+                  <Trash2 className="w-4 h-4" />
+                  删除 ({selectedMessages.size})
+                </motion.button>
+              </>
+            )}
+          </AnimatePresence>
 
-          {/* 消息角色过滤器：下拉选择框，支持全部/仅用户/仅助手 */}
-          <select
-            value={filter}
-            onChange={(e) => setFilter(e.target.value as 'all' | 'user' | 'assistant')}
-            className="px-3 py-1.5 rounded-lg bg-secondary text-foreground border border-border focus:outline-none focus:ring-2 focus:ring-ring"
-          >
-            <option value="all">全部消息</option>
-            <option value="user">仅用户</option>
-            <option value="assistant">仅助手</option>
-          </select>
+          {/* 消息角色过滤器：自定义下拉菜单，替代原生 <select> */}
+          <div className="relative" ref={filterRef}>
+            <motion.button
+              onClick={() => setShowFilterDropdown(!showFilterDropdown)}
+              className={`p-2 rounded-lg transition-colors ${
+                filter !== 'all'
+                  ? 'bg-primary text-primary-foreground'
+                  : 'hover:bg-accent'
+              }`}
+              title="过滤消息"
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+            >
+              <Filter className="w-5 h-5" />
+            </motion.button>
+            {/* 过滤器下拉菜单：带动画的选项列表 */}
+            <AnimatePresence>
+              {showFilterDropdown && (
+                <motion.div
+                  initial={{ opacity: 0, y: -8, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: -8, scale: 0.95 }}
+                  transition={{ duration: 0.15 }}
+                  className="absolute right-0 top-full mt-1 w-44 bg-popover border border-border rounded-lg shadow-lg z-50 overflow-hidden"
+                >
+                  {/* 全部消息选项 */}
+                  <button
+                    onClick={() => { setFilter('all'); setShowFilterDropdown(false); }}
+                    className={`w-full flex items-center gap-2 px-3 py-2 text-sm transition-colors ${
+                      filter === 'all' ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/50'
+                    }`}
+                  >
+                    <MessageSquare className="w-4 h-4" />
+                    <span className="flex-1 text-left">全部消息</span>
+                    {filter === 'all' && <span className="text-primary">&#10003;</span>}
+                  </button>
+                  {/* 仅用户消息选项 */}
+                  <button
+                    onClick={() => { setFilter('user'); setShowFilterDropdown(false); }}
+                    className={`w-full flex items-center gap-2 px-3 py-2 text-sm transition-colors ${
+                      filter === 'user' ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/50'
+                    }`}
+                  >
+                    <User className="w-4 h-4" />
+                    <span className="flex-1 text-left">仅用户</span>
+                    {filter === 'user' && <span className="text-primary">&#10003;</span>}
+                  </button>
+                  {/* 仅助手消息选项 */}
+                  <button
+                    onClick={() => { setFilter('assistant'); setShowFilterDropdown(false); }}
+                    className={`w-full flex items-center gap-2 px-3 py-2 text-sm transition-colors ${
+                      filter === 'assistant' ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/50'
+                    }`}
+                  >
+                    <Bot className="w-4 h-4" />
+                    <span className="flex-1 text-left">仅助手</span>
+                    {filter === 'assistant' && <span className="text-primary">&#10003;</span>}
+                  </button>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
 
-          {/* 导出按钮：Markdown */}
-          <button
-            onClick={() => onExport('markdown')}
-            className="p-2 rounded-lg hover:bg-accent transition-colors"
-            title="导出为 Markdown"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-            </svg>
-          </button>
+          {/* 导出按钮：自定义下拉菜单，统一 Markdown 和 JSON 导出入口 */}
+          <div className="relative" ref={exportRef}>
+            <motion.button
+              onClick={() => setShowExportDropdown(!showExportDropdown)}
+              className="p-2 rounded-lg hover:bg-accent transition-colors"
+              title="导出会话"
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+            >
+              <Download className="w-5 h-5" />
+            </motion.button>
+            {/* 导出下拉菜单：带动画的格式选项列表 */}
+            <AnimatePresence>
+              {showExportDropdown && (
+                <motion.div
+                  initial={{ opacity: 0, y: -8, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: -8, scale: 0.95 }}
+                  transition={{ duration: 0.15 }}
+                  className="absolute right-0 top-full mt-1 w-44 bg-popover border border-border rounded-lg shadow-lg z-50 overflow-hidden"
+                >
+                  {/* Markdown 格式导出 */}
+                  <button
+                    onClick={() => { onExport('markdown'); setShowExportDropdown(false); }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent/50 transition-colors"
+                  >
+                    <FileText className="w-4 h-4" />
+                    <span>Markdown</span>
+                  </button>
+                  {/* JSON 格式导出 */}
+                  <button
+                    onClick={() => { onExport('json'); setShowExportDropdown(false); }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent/50 transition-colors"
+                  >
+                    <FileJson className="w-4 h-4" />
+                    <span>JSON</span>
+                  </button>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
 
-          {/* 导出按钮：JSON */}
-          <button
-            onClick={() => onExport('json')}
-            className="p-2 rounded-lg hover:bg-accent transition-colors"
-            title="导出为 JSON"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-            </svg>
-          </button>
-
-          {/* 刷新按钮 */}
-          <button
+          {/* 刷新按钮：悬停时旋转 180 度提供视觉反馈 */}
+          <motion.button
             onClick={onRefresh}
             className="p-2 rounded-lg hover:bg-accent transition-colors"
             title="刷新"
+            whileHover={{ scale: 1.05, rotate: 180 }}
+            whileTap={{ scale: 0.95 }}
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-              />
-            </svg>
-          </button>
+            <RefreshCw className="w-5 h-5" />
+          </motion.button>
 
-          {/* 滚动到底部 */}
-          <button
+          {/* 滚动到底部按钮 */}
+          <motion.button
             onClick={() => scrollToBottom()}
             className="p-2 rounded-lg hover:bg-accent transition-colors"
             title="滚动到底部"
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
-            </svg>
-          </button>
+            <ArrowDown className="w-5 h-5" />
+          </motion.button>
         </div>
       </div>
 
       {/* 消息列表：可滚动区域，遍历渲染所有经过过滤的消息 */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
         {filteredMessages.length === 0 ? (
+          /* 空消息列表占位提示 */
           <div className="text-center text-muted-foreground py-8">没有消息</div>
         ) : (
-          filteredMessages.map((msg) => (
-            <div
+          filteredMessages.map((msg, index) => (
+            <motion.div
               key={msg.uuid}
-              className={`rounded-lg p-4 ${
-                msg.type === 'user' ? 'message-user' : 'message-assistant'
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.2 }}
+              className={`rounded-xl p-4 message-bubble ${
+                msg.type === 'user'
+                  ? 'bg-primary/5 border border-primary/10'
+                  : 'bg-muted/50 border border-border'
               } ${selectionMode && selectedMessages.has(msg.uuid) ? 'ring-2 ring-primary' : ''}`}
               onClick={selectionMode ? () => onToggleSelect(msg.uuid) : undefined}
               style={selectionMode ? { cursor: 'pointer' } : undefined}
             >
               {/* 消息头部：显示复选框（选择模式）、角色标签、时间戳、模型信息和操作按钮 */}
-              <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center justify-between mb-2 group">
                 <div className="flex items-center gap-2">
-                  {/* 选择模式下显示复选框 */}
+                  {/* 选择模式下显示复选框图标 */}
                   {selectionMode && (
-                    <input
-                      type="checkbox"
-                      checked={selectedMessages.has(msg.uuid)}
-                      onChange={(e) => {
+                    <button
+                      onClick={(e) => {
                         e.stopPropagation();
                         onToggleSelect(msg.uuid);
                       }}
-                      className="w-4 h-4 rounded border-border accent-primary"
-                    />
+                      className="text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      {selectedMessages.has(msg.uuid) ? (
+                        <CheckSquare className="w-4 h-4 text-primary" />
+                      ) : (
+                        <Square className="w-4 h-4" />
+                      )}
+                    </button>
                   )}
+                  {/* 角色徽章：圆形药丸样式，带图标区分用户/助手 */}
                   <span
-                    className={`px-2 py-0.5 rounded text-xs font-medium ${
+                    className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium ${
                       msg.type === 'user'
                         ? 'bg-primary text-primary-foreground'
                         : 'bg-secondary text-secondary-foreground'
                     }`}
                   >
+                    {msg.type === 'user' ? (
+                      <User className="w-3 h-3" />
+                    ) : (
+                      <Bot className="w-3 h-3" />
+                    )}
                     {msg.type === 'user' ? '用户' : '助手'}
                   </span>
+                  {/* 消息时间戳 */}
                   <span className="text-xs text-muted-foreground">
                     {formatTimestamp(msg.timestamp)}
                   </span>
+                  {/* 模型信息：仅在消息包含模型字段时显示 */}
                   {msg.message?.model && (
                     <span className="text-xs text-muted-foreground">
                       模型: {msg.message.model}
                     </span>
                   )}
                 </div>
-                {/* 非选择模式下显示操作按钮 */}
+                {/* 非选择模式下显示操作按钮，鼠标悬停在消息卡片上时才可见 */}
                 {!selectionMode && (
-                  <div className="flex items-center gap-1">
-                    <button
+                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    {/* 复制按钮 */}
+                    <motion.button
                       onClick={() => copyToClipboard(getMessageText(msg))}
                       className="p-1.5 rounded hover:bg-accent transition-colors"
                       title="复制"
+                      whileHover={{ scale: 1.1 }}
+                      whileTap={{ scale: 0.9 }}
                     >
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
-                        />
-                      </svg>
-                    </button>
-                    <button
+                      <Copy className="w-4 h-4" />
+                    </motion.button>
+                    {/* 编辑按钮 */}
+                    <motion.button
                       onClick={() => handleStartEdit(msg)}
                       className="p-1.5 rounded hover:bg-accent transition-colors"
                       title="编辑"
+                      whileHover={{ scale: 1.1 }}
+                      whileTap={{ scale: 0.9 }}
                     >
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-                        />
-                      </svg>
-                    </button>
-                    <button
+                      <Edit2 className="w-4 h-4" />
+                    </motion.button>
+                    {/* 删除按钮 */}
+                    <motion.button
                       onClick={() => onDeleteMessage(msg.uuid)}
                       className="p-1.5 rounded hover:bg-destructive/10 text-destructive transition-colors"
                       title="删除"
+                      whileHover={{ scale: 1.1 }}
+                      whileTap={{ scale: 0.9 }}
                     >
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                        />
-                      </svg>
-                    </button>
+                      <Trash2 className="w-4 h-4" />
+                    </motion.button>
                   </div>
                 )}
               </div>
@@ -548,7 +662,7 @@ export function ChatView({
                   {msg.message.usage.output_tokens} tokens
                 </div>
               )}
-            </div>
+            </motion.div>
           ))
         )}
         <div ref={messagesEndRef} />

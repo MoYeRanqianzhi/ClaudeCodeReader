@@ -15,6 +15,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import { AnimatePresence } from 'motion/react';
 import { Sidebar, ChatView, SettingsPanel } from './components';
 import type { Project, Session, SessionMessage, ClaudeSettings, EnvSwitcherConfig, EnvProfile } from './types/claude';
 import {
@@ -570,25 +571,29 @@ function App() {
 
   // ============ 正常渲染：主应用界面 ============
   return (
-    <div className="h-screen flex bg-background">
-      {/* 左侧边栏：项目导航、会话列表、环境配置切换（折叠时隐藏） */}
-      {!sidebarCollapsed && (
-        <Sidebar
-          projects={projects}
-          currentProject={currentProject}
-          currentSession={currentSession}
-          envConfig={envConfig}
-          onSelectProject={setCurrentProject}
-          onSelectSession={handleSelectSession}
-          onDeleteSession={handleDeleteSession}
-          onOpenSettings={() => setShowSettings(true)}
-          onSwitchEnvProfile={handleSwitchEnvProfile}
-          onSaveEnvProfile={handleSaveEnvProfile}
-          onDeleteEnvProfile={handleDeleteEnvProfile}
-          onEditEnvProfile={handleEditEnvProfile}
-          onCollapse={() => setSidebarCollapsed(true)}
-        />
-      )}
+    <div className="h-screen w-screen overflow-hidden flex">
+      {/* 左侧边栏：项目导航、会话列表、环境配置切换（折叠时隐藏）
+          使用 AnimatePresence 包裹条件渲染，使侧边栏在显示/隐藏时可以执行进出场动画。
+          AnimatePresence 会在子组件从 DOM 移除前等待其退出动画完成。 */}
+      <AnimatePresence>
+        {!sidebarCollapsed && (
+          <Sidebar
+            projects={projects}
+            currentProject={currentProject}
+            currentSession={currentSession}
+            envConfig={envConfig}
+            onSelectProject={setCurrentProject}
+            onSelectSession={handleSelectSession}
+            onDeleteSession={handleDeleteSession}
+            onOpenSettings={() => setShowSettings(true)}
+            onSwitchEnvProfile={handleSwitchEnvProfile}
+            onSaveEnvProfile={handleSaveEnvProfile}
+            onDeleteEnvProfile={handleDeleteEnvProfile}
+            onEditEnvProfile={handleEditEnvProfile}
+            onCollapse={() => setSidebarCollapsed(true)}
+          />
+        )}
+      </AnimatePresence>
 
       {/* 主内容区：聊天消息展示和操作 */}
       <ChatView
@@ -611,6 +616,7 @@ function App() {
 
       {/*
         设置面板（浮层）：根据 showSettings 条件渲染。
+        使用 AnimatePresence 包裹，使面板在打开/关闭时可以执行进出场动画。
         支持两种渲染模式：
 
         1. 普通设置模式（editingEnvProfile 为 null）：
@@ -623,28 +629,30 @@ function App() {
            - onSaveSettings 被替换为一个包装函数，将编辑结果
              通过 handleSaveEditedProfile 保存到环境配置文件
       */}
-      {showSettings && (
-        <SettingsPanel
-          settings={editingEnvProfile ? { ...settings, env: editingEnvProfile.env } : settings}
-          claudeDataPath={claudeDataPath}
-          theme={theme}
-          editingProfile={editingEnvProfile}
-          onSaveSettings={editingEnvProfile ?
-            (newSettings) => {
-              if (editingEnvProfile) {
-                handleSaveEditedProfile({ ...editingEnvProfile, env: newSettings.env || {} });
-              }
-            } :
-            handleSaveSettings
-          }
-          onThemeChange={setTheme}
-          onClose={() => {
-            setShowSettings(false);
-            // 关闭面板时同时退出配置编辑模式
-            setEditingEnvProfile(null);
-          }}
-        />
-      )}
+      <AnimatePresence>
+        {showSettings && (
+          <SettingsPanel
+            settings={editingEnvProfile ? { ...settings, env: editingEnvProfile.env } : settings}
+            claudeDataPath={claudeDataPath}
+            theme={theme}
+            editingProfile={editingEnvProfile}
+            onSaveSettings={editingEnvProfile ?
+              (newSettings) => {
+                if (editingEnvProfile) {
+                  handleSaveEditedProfile({ ...editingEnvProfile, env: newSettings.env || {} });
+                }
+              } :
+              handleSaveSettings
+            }
+            onThemeChange={setTheme}
+            onClose={() => {
+              setShowSettings(false);
+              // 关闭面板时同时退出配置编辑模式
+              setEditingEnvProfile(null);
+            }}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }

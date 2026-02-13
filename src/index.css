@@ -7,87 +7,384 @@
 @import "tailwindcss";
 
 /* ==========================================================================
-   浅色主题变量（默认主题）
-   基于 shadcn/ui 设计系统，使用 HSL 色彩空间定义语义化颜色。
-   这些变量通过 @theme 指令注册到 Tailwind CSS 4 的主题系统中，
-   可以在 Tailwind 类名中直接引用（如 bg-background, text-foreground）。
+   自定义变体定义
+   定义暗色模式变体，使 Tailwind 的 dark: 前缀能够根据 .dark 类名生效。
    ========================================================================== */
-@theme {
-  --color-border: hsl(240 5.9% 90%);              /* 边框颜色 — 用于分隔线、卡片边框等通用边框 */
-  --color-input: hsl(240 5.9% 90%);               /* 输入框边框颜色 — 文本框、选择框等表单控件的边框 */
-  --color-ring: hsl(240 5.9% 10%);                /* 焦点环颜色 — 键盘导航时元素获得焦点的外圈高亮 */
-  --color-background: hsl(0 0% 100%);             /* 页面背景色 — 整个应用的底层背景（纯白） */
-  --color-foreground: hsl(240 10% 3.9%);          /* 主文字颜色 — 正文、标题等主要文本内容 */
-  --color-primary: hsl(240 5.9% 10%);             /* 主要操作按钮背景色 — 同时用于用户消息标签的背景 */
-  --color-primary-foreground: hsl(0 0% 98%);      /* 主要操作按钮文字色 — 与 primary 背景形成高对比度 */
-  --color-secondary: hsl(240 4.8% 95.9%);         /* 次要元素背景色 — 标签、徽章等辅助 UI 元素 */
-  --color-secondary-foreground: hsl(240 5.9% 10%); /* 次要元素文字色 — 在 secondary 背景上的文本 */
-  --color-destructive: hsl(0 84.2% 60.2%);        /* 危险操作背景色 — 删除按钮、错误提示等破坏性操作 */
-  --color-destructive-foreground: hsl(0 0% 98%);  /* 危险操作文字色 — 在 destructive 背景上的文本 */
-  --color-muted: hsl(240 4.8% 95.9%);             /* 弱化区域背景色 — 侧边栏、禁用状态等低优先级区域 */
-  --color-muted-foreground: hsl(240 3.8% 46.1%);  /* 辅助文字颜色 — 时间戳、占位符等次要文本 */
-  --color-accent: hsl(240 4.8% 95.9%);            /* 悬停高亮背景色 — 列表项悬停态、助手消息边框 */
-  --color-accent-foreground: hsl(240 5.9% 10%);   /* 悬停高亮文字色 — 在 accent 背景上的文本 */
-  --color-card: hsl(0 0% 100%);                   /* 卡片容器背景色 — 对话卡片、设置面板等浮层 */
-  --color-card-foreground: hsl(240 10% 3.9%);     /* 卡片容器文字色 — 卡片内的文本内容 */
-  --radius-lg: 0.5rem;                            /* 大圆角 — 卡片、模态框等大型容器 */
-  --radius-md: 0.375rem;                          /* 中圆角 — 按钮、输入框等中型元素 */
-  --radius-sm: 0.25rem;                           /* 小圆角 — 标签、徽章等小型元素 */
+@custom-variant dark (&:is(.dark *));
+
+/* ==========================================================================
+   浅色主题变量（默认主题）
+   使用柔和的紫色作为主色调，营造现代、专业的视觉效果。
+   通过 CSS 自定义属性实现主题切换，所有颜色值使用 HEX 格式以兼容透明度运算。
+   ========================================================================== */
+:root {
+  /* 基础背景和文字 */
+  --background: #ffffff;
+  --foreground: #1a1a1a;
+  --card: #ffffff;
+  --card-foreground: #1a1a1a;
+  --popover: #ffffff;
+  --popover-foreground: #1a1a1a;
+
+  /* 主色调 — 柔和紫色，用于主要操作按钮、激活状态指示 */
+  --primary: #8b5cf6;
+  --primary-foreground: #ffffff;
+
+  /* 次要色 — 浅紫色，用于标签、徽章等辅助 UI 元素 */
+  --secondary: #f5f3ff;
+  --secondary-foreground: #6d28d9;
+
+  /* 弱化色 — 用于侧边栏背景、禁用状态、次要文本 */
+  --muted: #f8fafc;
+  --muted-foreground: #64748b;
+
+  /* 悬停高亮色 — 用于列表项悬停态、下拉菜单选项 */
+  --accent: #f1f5f9;
+  --accent-foreground: #1a1a1a;
+
+  /* 危险操作色 — 删除、错误提示等破坏性操作 */
+  --destructive: #ef4444;
+  --destructive-foreground: #ffffff;
+
+  /* 边框和输入框 */
+  --border: #e2e8f0;
+  --input: transparent;
+  --input-background: #f8fafc;
+  --ring: #8b5cf6;
+
+  /* 圆角 */
+  --radius: 0.75rem;
+
+  /* 侧边栏专用色 — 区分侧边栏和主内容区的视觉层级 */
+  --sidebar: #fafafa;
+  --sidebar-foreground: #1a1a1a;
+  --sidebar-primary: #8b5cf6;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #f5f3ff;
+  --sidebar-accent-foreground: #6d28d9;
+  --sidebar-border: #e2e8f0;
 }
 
 /* ==========================================================================
    深色主题变量
    通过 document.documentElement.classList.toggle('dark') 切换。
-   所有颜色使用更深的底色和更浅的前景色以减少眼部疲劳。
+   使用深色底色 + 紫色高亮的配色方案。
    ========================================================================== */
 .dark {
-  --color-border: hsl(240 3.7% 15.9%);            /* 边框颜色 — 深色模式下使用更暗的分隔线 */
-  --color-input: hsl(240 3.7% 15.9%);             /* 输入框边框颜色 — 与深色背景融合的表单边框 */
-  --color-ring: hsl(240 4.9% 83.9%);              /* 焦点环颜色 — 深色背景上的明亮焦点指示 */
-  --color-background: hsl(240 10% 3.9%);          /* 页面背景色 — 接近纯黑的深色底色 */
-  --color-foreground: hsl(0 0% 98%);              /* 主文字颜色 — 接近纯白的文本以确保可读性 */
-  --color-primary: hsl(0 0% 98%);                 /* 主要操作按钮背景色 — 深色模式下反转为浅色 */
-  --color-primary-foreground: hsl(240 5.9% 10%);  /* 主要操作按钮文字色 — 深色文字配合浅色按钮 */
-  --color-secondary: hsl(240 3.7% 15.9%);         /* 次要元素背景色 */
-  --color-secondary-foreground: hsl(0 0% 98%);    /* 次要元素文字色 */
-  --color-destructive: hsl(0 62.8% 30.6%);        /* 危险操作背景色 — 降低饱和度以适应深色环境 */
-  --color-destructive-foreground: hsl(0 0% 98%);  /* 危险操作文字色 */
-  --color-muted: hsl(240 3.7% 15.9%);             /* 弱化区域背景色 */
-  --color-muted-foreground: hsl(240 5% 64.9%);    /* 辅助文字颜色 — 比浅色模式更亮以保持可读性 */
-  --color-accent: hsl(240 3.7% 15.9%);            /* 悬停高亮背景色 */
-  --color-accent-foreground: hsl(0 0% 98%);       /* 悬停高亮文字色 */
-  --color-card: hsl(240 10% 3.9%);                /* 卡片容器背景色 — 与页面背景同色，通过边框区分层级 */
-  --color-card-foreground: hsl(0 0% 98%);         /* 卡片容器文字色 */
+  --background: #0a0a0a;
+  --foreground: #ededed;
+  --card: #141414;
+  --card-foreground: #ededed;
+  --popover: #141414;
+  --popover-foreground: #ededed;
+
+  --primary: #a78bfa;
+  --primary-foreground: #ffffff;
+
+  --secondary: #1e1b4b;
+  --secondary-foreground: #c4b5fd;
+
+  --muted: #1e1e1e;
+  --muted-foreground: #94a3b8;
+  --accent: #27272a;
+  --accent-foreground: #ededed;
+
+  --destructive: #ef4444;
+  --destructive-foreground: #ffffff;
+
+  --border: #27272a;
+  --input: #27272a;
+  --ring: #a78bfa;
+
+  --sidebar: #141414;
+  --sidebar-foreground: #ededed;
+  --sidebar-primary: #a78bfa;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #1e1b4b;
+  --sidebar-accent-foreground: #c4b5fd;
+  --sidebar-border: #27272a;
 }
 
 /* ==========================================================================
-   全局基础样式重置
-   确保所有元素使用 border-box 盒模型，并将根容器撑满视口。
-   overflow: hidden 防止出现全局滚动条，滚动交由各子区域自行处理。
+   Tailwind CSS 4 主题注册
+   将 CSS 自定义属性映射到 Tailwind 的 @theme 系统中，
+   使得可以在 Tailwind 类名中直接使用（如 bg-background, text-primary）。
    ========================================================================== */
-* {
-  border-color: var(--color-border);
-  box-sizing: border-box;
-}
-
-html, body, #root {
-  height: 100%;
-  margin: 0;
-  padding: 0;
-  overflow: hidden;
-}
-
-body {
-  background-color: var(--color-background);
-  color: var(--color-foreground);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-input-background: var(--input-background);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
 }
 
 /* ==========================================================================
-   滚动条自定义样式（WebKit 浏览器）
-   Tauri 使用 WebView 渲染界面，在 macOS/Windows 上均基于 WebKit/Chromium，
-   因此 ::-webkit-scrollbar 伪元素可以生效。
-   窄滚动条（8px）配合圆角设计，与整体 UI 风格保持一致。
+   全局基础样式
+   ========================================================================== */
+@layer base {
+  * {
+    @apply border-border;
+    box-sizing: border-box;
+  }
+
+  html, body, #root {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+  }
+
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  }
+}
+
+/* ==========================================================================
+   工具类和组件样式
+   ========================================================================== */
+@layer utilities {
+  /* ---------- 动画效果 ---------- */
+
+  /* 渐入 + 上浮动画：用于消息卡片、弹出面板等元素的进场效果 */
+  .animate-fade-in {
+    animation: fadeIn 0.4s ease-in-out;
+  }
+
+  @keyframes fadeIn {
+    from {
+      opacity: 0;
+      transform: translateY(-10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  /* 侧滑入场动画：用于侧边栏和导航元素 */
+  .animate-slide-in {
+    animation: slideIn 0.3s ease-out;
+  }
+
+  @keyframes slideIn {
+    from {
+      transform: translateX(-20px);
+      opacity: 0;
+    }
+    to {
+      transform: translateX(0);
+      opacity: 1;
+    }
+  }
+
+  /* 缩放入场动画：用于模态框、弹出层的出现 */
+  .animate-scale-in {
+    animation: scaleIn 0.2s ease-out;
+  }
+
+  @keyframes scaleIn {
+    from {
+      transform: scale(0.95);
+      opacity: 0;
+    }
+    to {
+      transform: scale(1);
+      opacity: 1;
+    }
+  }
+
+  /* ---------- 悬停效果 ---------- */
+
+  /* 悬停上浮效果：鼠标悬停时元素轻微上移并加深阴影 */
+  .hover-lift {
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .hover-lift:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  }
+
+  /* 卡片悬停效果：轻微上浮 + 柔和阴影 */
+  .card-hover {
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .card-hover:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  }
+
+  /* ---------- 消息气泡样式 ---------- */
+
+  /* 消息气泡：统一的圆角和过渡效果 */
+  .message-bubble {
+    position: relative;
+    border-radius: 1rem;
+    padding: 1rem 1.25rem;
+    transition: all 0.2s ease;
+  }
+
+  /* ---------- 内容块样式 ---------- */
+
+  /* 工具调用块：蓝色左边框 + 淡蓝色背景 */
+  .tool-use-block {
+    background: rgba(59, 130, 246, 0.05);
+    border-left: 3px solid #3b82f6;
+    padding: 0.75rem;
+    border-radius: 0.75rem;
+    margin: 0.5rem 0;
+    transition: all 0.2s ease;
+  }
+
+  /* 工具图标：与工具名称对齐的间距 */
+  .tool-use-icon {
+    display: inline-block;
+    margin-right: 0.5rem;
+  }
+
+  /* 工具结果块：绿色左边框 + 淡绿色背景 */
+  .tool-result-block {
+    background: rgba(16, 185, 129, 0.05);
+    border-left: 3px solid #10b981;
+    padding: 0.75rem;
+    border-radius: 0.75rem;
+    margin: 0.5rem 0;
+    transition: all 0.2s ease;
+  }
+
+  /* 工具结果错误状态：红色边框 + 淡红色背景 */
+  .tool-result-error {
+    background: rgba(239, 68, 68, 0.05);
+    border-left: 3px solid #ef4444;
+  }
+
+  /* 思考过程块：紫色虚线左边框 + 淡紫色背景 */
+  .thinking-block {
+    background: rgba(139, 92, 246, 0.05);
+    border-left: 3px dashed #8b5cf6;
+    padding: 0.75rem;
+    border-radius: 0.75rem;
+    margin: 0.5rem 0;
+    transition: all 0.2s ease;
+    opacity: 0.85;
+  }
+
+  /* 图片内容块 */
+  .image-block {
+    margin: 0.5rem 0;
+  }
+
+  .image-block img {
+    max-height: 400px;
+    object-fit: contain;
+  }
+
+  /* 代码块：等宽字体 + 柔和背景 */
+  .code-block {
+    background: #f8fafc;
+    border-radius: 0.5rem;
+    padding: 0.75rem;
+    overflow-x: auto;
+    font-family: monospace;
+    font-size: 0.875rem;
+  }
+
+  .dark .code-block {
+    background: #1e1e1e;
+  }
+
+  /* 可折叠区块 (<details>) 的标题栏样式 */
+  details.content-block > summary {
+    padding: 0.25rem 0;
+    font-size: 0.875rem;
+    line-height: 1.5;
+    list-style: none;
+  }
+
+  details.content-block > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  details.content-block[open] > summary {
+    margin-bottom: 0.5rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  /* ---------- 自定义滚动条 ---------- */
+
+  /* 窄型自定义滚动条（6px）：用于侧边栏、消息列表等可滚动区域 */
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 3px;
+    transition: all 0.2s ease;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: #94a3b8;
+  }
+
+  .dark .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: #3f3f46;
+  }
+
+  .dark .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: #52525b;
+  }
+
+  /* ---------- Tailwind CSS 工具类后备 ---------- */
+  /* 确保核心布局类在 JIT 引擎未扫描到时仍然可用 */
+  .flex { display: flex; }
+  .flex-1 { flex: 1 1 0%; }
+  .flex-col { flex-direction: column; }
+  .h-screen { height: 100vh; }
+  .h-full { height: 100%; }
+  .w-72 { width: 18rem; }
+  .min-w-0 { min-width: 0; }
+  .overflow-hidden { overflow: hidden; }
+  .overflow-y-auto { overflow-y: auto; }
+}
+
+/* ==========================================================================
+   全局滚动条样式（非 .custom-scrollbar 区域的默认滚动条）
    ========================================================================== */
 ::-webkit-scrollbar {
   width: 8px;
@@ -95,144 +392,15 @@ body {
 }
 
 ::-webkit-scrollbar-track {
-  background: var(--color-muted);
+  background: var(--muted);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--color-muted-foreground);
+  background: var(--muted-foreground);
   opacity: 0.3;
   border-radius: 9999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
   opacity: 0.5;
-}
-
-/* ==========================================================================
-   消息类型样式
-   聊天记录中用户消息和助手消息采用不同的视觉样式加以区分。
-   - .message-user:    左侧使用 primary 色条，背景为半透明 primary 底色
-   - .message-assistant: 左侧使用 accent 色条，背景为 muted 柔和灰色
-   ========================================================================== */
-.message-user {
-  background: color-mix(in srgb, var(--color-primary) 10%, transparent);
-  border-left: 4px solid var(--color-primary);
-}
-
-.message-assistant {
-  background: var(--color-muted);
-  border-left: 4px solid var(--color-accent);
-}
-
-/* ==========================================================================
-   代码块样式
-   对话中代码片段的容器样式。使用等宽字体、secondary 背景色和圆角，
-   并允许水平滚动以防止长代码行溢出容器。
-   ========================================================================== */
-.code-block {
-  background: var(--color-secondary);
-  border-radius: 0.5rem;
-  padding: 1rem;
-  overflow-x: auto;
-  font-family: monospace;
-  font-size: 0.875rem;
-}
-
-/* ==========================================================================
-   Tailwind CSS 工具类手动覆盖
-   在某些构建场景下，Tailwind CSS 4 的 JIT（即时编译）引擎可能未能
-   正确扫描到模板中使用的动态类名（例如通过变量拼接生成的类名），
-   导致对应的工具类不会被生成。这里手动定义核心布局类作为后备方案，
-   确保 flex 弹性布局、全屏高度和溢出控制等关键样式始终可用。
-   ========================================================================== */
-.flex { display: flex; }
-.flex-1 { flex: 1 1 0%; }
-.flex-col { flex-direction: column; }
-.h-screen { height: 100vh; }
-.h-full { height: 100%; }
-.w-72 { width: 18rem; }
-.min-w-0 { min-width: 0; }
-.overflow-hidden { overflow: hidden; }
-.overflow-y-auto { overflow-y: auto; }
-
-/* ==========================================================================
-   内容块样式
-   不同类型的消息内容块使用独立的视觉样式进行区分：
-   - 工具调用 (tool_use): 蓝色左边框，表示 AI 正在使用工具
-   - 工具结果 (tool_result): 绿色左边框表示成功，红色表示失败
-   - 思考过程 (thinking): 虚线左边框，暗示这是内部推理过程
-   - 图片 (image): 轻微的边框和内边距包裹
-   - 可折叠区块 (<details>): 统一的折叠/展开交互样式
-   ========================================================================== */
-
-/** 工具调用块：蓝色左边框 + 淡蓝色背景，表示 AI 发起了一次工具调用 */
-.tool-use-block {
-  border-left: 3px solid hsl(217 91% 60%);
-  background: color-mix(in srgb, hsl(217 91% 60%) 5%, transparent);
-  padding: 0.75rem;
-  border-radius: 0.375rem;
-  margin: 0.25rem 0;
-}
-
-/** 工具调用块中的工具图标：右侧留出间距，使图标与工具名称对齐 */
-.tool-use-icon {
-  margin-right: 0.5rem;
-}
-
-/** 工具结果块：绿色左边框 + 淡绿色背景，表示工具执行成功返回了结果 */
-.tool-result-block {
-  border-left: 3px solid hsl(142 76% 36%);
-  background: color-mix(in srgb, hsl(142 76% 36%) 5%, transparent);
-  padding: 0.75rem;
-  border-radius: 0.375rem;
-  margin: 0.25rem 0;
-}
-
-/** 工具结果错误状态：覆盖为红色左边框 + 淡红色背景，突出显示错误 */
-.tool-result-error {
-  border-left-color: hsl(0 84.2% 60.2%);
-  background: color-mix(in srgb, hsl(0 84.2% 60.2%) 5%, transparent);
-}
-
-/** 思考过程块：虚线左边框 + 淡灰色背景，暗示这是 AI 的内部推理，非最终输出 */
-.thinking-block {
-  border-left: 3px dashed var(--color-muted-foreground);
-  background: color-mix(in srgb, var(--color-muted) 50%, transparent);
-  padding: 0.75rem;
-  border-radius: 0.375rem;
-  margin: 0.25rem 0;
-  opacity: 0.85;
-}
-
-/** 图片内容块：居中展示，限制最大宽度防止大图撑爆布局 */
-.image-block {
-  margin: 0.5rem 0;
-}
-
-.image-block img {
-  max-height: 400px;
-  object-fit: contain;
-}
-
-/**
- * 可折叠内容块的标题栏样式
- * 应用于 <details> 元素的 <summary>，提供统一的交互反馈
- */
-details.content-block > summary {
-  padding: 0.25rem 0;
-  font-size: 0.875rem;
-  line-height: 1.5;
-  list-style: none;
-}
-
-/** 隐藏默认的三角形展开指示器（WebKit 浏览器） */
-details.content-block > summary::-webkit-details-marker {
-  display: none;
-}
-
-/** 展开状态下的 summary 底部加细分隔线 */
-details.content-block[open] > summary {
-  margin-bottom: 0.5rem;
-  padding-bottom: 0.5rem;
-  border-bottom: 1px solid var(--color-border);
 }
