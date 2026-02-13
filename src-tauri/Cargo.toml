@@ -1,6 +1,6 @@
 [package]
 name = "claude-code-reader"
-version = "0.3.0-beta.2"
+version = "1.0.0-beta.1"
 description = "Claude Code Reader - 查看和管理Claude Code聊天记录"
 authors = ["Claude Code Reader"]
 license = "MIT"
