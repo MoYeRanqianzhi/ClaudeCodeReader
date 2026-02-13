@@ -223,29 +223,36 @@
 
   /* ---------- 渐变文字效果 ---------- */
 
-  /* 渐变文字：紫色到粉色的线性渐变，通过 background-clip: text 裁剪实现文字填色 */
+  /* 渐变流光文字：多色渐变通过 background-clip: text 裁剪实现文字填色，
+     配合 animate-gradient 产生持续的流光扫过效果 */
   .gradient-text {
-    background: linear-gradient(135deg, #a78bfa 0%, #ec4899 100%);
+    background: linear-gradient(
+      90deg,
+      #a78bfa 0%,
+      #818cf8 15%,
+      #c084fc 30%,
+      #e879f9 45%,
+      #ec4899 60%,
+      #f472b6 75%,
+      #a78bfa 100%
+    );
+    background-size: 200% 100%;
     -webkit-background-clip: text;
     background-clip: text;
     -webkit-text-fill-color: transparent;
   }
 
-  /* 渐变背景动画：配合 gradient-text 使用，使渐变色循环流动 */
+  /* 流光动画：水平方向持续滚动渐变，产生流光从左到右扫过文字的视觉效果 */
   .animate-gradient {
-    background-size: 200% 200%;
-    animation: gradient 8s ease infinite;
+    animation: gradient-flow 4s linear infinite;
   }
 
-  @keyframes gradient {
+  @keyframes gradient-flow {
     0% {
       background-position: 0% 50%;
     }
-    50% {
-      background-position: 100% 50%;
-    }
     100% {
-      background-position: 0% 50%;
+      background-position: -200% 50%;
     }
   }
 
