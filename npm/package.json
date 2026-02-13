@@ -25,12 +25,8 @@
   "bin": {
     "ccr": "./bin/ccr.js"
   },
-  "scripts": {
-    "postinstall": "node scripts/postinstall.js"
-  },
   "files": [
-    "bin",
-    "scripts"
+    "bin"
   ],
   "engines": {
     "node": ">=16.0.0"
@@ -39,5 +35,11 @@
     "win32",
     "darwin",
     "linux"
-  ]
+  ],
+  "optionalDependencies": {
+    "claude-code-reader-win32-x64": "0.3.0-beta.1",
+    "claude-code-reader-darwin-arm64": "0.3.0-beta.1",
+    "claude-code-reader-darwin-x64": "0.3.0-beta.1",
+    "claude-code-reader-linux-x64": "0.3.0-beta.1"
+  }
 }

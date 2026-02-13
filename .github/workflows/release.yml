@@ -6,7 +6,7 @@
 #   1. Tag 推送 (v*):
 #      → 构建并发布正式版 Release
 #      → 构建所有平台的 Tauri 桌面应用
-#      → 发布到 NPM Registry
+#      → 发布平台专属 NPM 包 + 主包到 NPM Registry
 #
 #   2. 分支推送 (任意分支):
 #      → 构建并发布预发布版 Pre-release
@@ -17,6 +17,11 @@
 #   3. 手动触发 (workflow_dispatch):
 #      → 指定已有 Tag 补发历史版本
 #      → 用于修复发布失败等场景
+#
+# NPM 发布架构：
+#   采用平台专属包模式（类似 esbuild/swc），每个平台有独立的 NPM 包，
+#   包含预编译的二进制文件。主包通过 optionalDependencies 引用平台包，
+#   npm 根据当前平台自动安装对应的包，无需 postinstall 下载。
 # =============================================================================
 
 name: Build & Release
@@ -242,7 +247,8 @@ jobs:
   # ===========================================================================
   # Job 3: 在多个平台上并行构建 Tauri 桌面应用
   # 依赖 create-release Job，需要 Release ID 来上传构建产物。
-  # 构建完成后将 .exe/.dmg/.deb/.AppImage 等安装包上传到 GitHub Release。
+  # 构建完成后将 .exe/.dmg/.deb/.AppImage 等安装包上传到 GitHub Release，
+  # 并将 NPM 平台包所需的二进制文件作为 artifact 上传供 publish-npm 使用。
   # ===========================================================================
   build-tauri:
     needs: [prepare, create-release]    # 同时依赖 prepare（元数据）和 create-release（Release ID）
@@ -258,18 +264,22 @@ jobs:
           - platform: 'macos-latest'
             args: '--target aarch64-apple-darwin'
             target: 'aarch64-apple-darwin'
+            npm_pkg: 'darwin-arm64'
           # ---- macOS x86_64 (Intel Mac) ----
           - platform: 'macos-latest'
             args: '--target x86_64-apple-darwin'
             target: 'x86_64-apple-darwin'
+            npm_pkg: 'darwin-x64'
           # ---- Linux x86_64 (Ubuntu 22.04) ----
           - platform: 'ubuntu-22.04'
             args: ''
             target: ''
+            npm_pkg: 'linux-x64'
           # ---- Windows x86_64 (使用 NSIS 安装器格式) ----
           - platform: 'windows-latest'
             args: '--bundles nsis'
             target: ''
+            npm_pkg: 'win32-x64'
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -332,13 +342,13 @@ jobs:
               echo "Collected: $BASENAME -> $NEW_NAME"
             done
 
-          # Windows 额外产物：复制独立 .exe 二进制文件（供 NPM postinstall 直接下载）
+          # Windows 额外产物：复制独立 .exe 二进制文件（供 GitHub Release 直接下载）
           if [ -f "src-tauri/target/release/claude-code-reader.exe" ]; then
             cp src-tauri/target/release/claude-code-reader.exe "upload/ClaudeCodeReader_${ARTIFACT_VERSION}_x64.exe"
             echo "Collected: standalone Windows exe"
           fi
 
-          # macOS 额外产物：将 .app 目录打包为 tar.gz（供 NPM postinstall 下载解压）
+          # macOS 额外产物：将 .app 目录打包为 tar.gz（供 GitHub Release 下载）
           TARGET="${{ matrix.target }}"
           if [ -n "$TARGET" ] && [ -d "src-tauri/target/${TARGET}/release/bundle/macos/ClaudeCodeReader.app" ]; then
             cd "src-tauri/target/${TARGET}/release/bundle/macos"
@@ -356,12 +366,64 @@ jobs:
           tag_name: ${{ needs.prepare.outputs.tag_name }}
           files: upload/*
 
+      # -----------------------------------------------------------------------
+      # 准备 NPM 平台包的二进制文件 artifact
+      # 将构建产物复制到 npm-binary/bin/ 目录，供 publish-npm Job 使用。
+      # 每个平台的二进制文件格式不同：
+      # - Windows: 独立 .exe 可执行文件
+      # - macOS:   完整的 .app 应用束目录
+      # - Linux:   AppImage 单文件可执行包
+      # -----------------------------------------------------------------------
+      - name: Prepare NPM binary artifact
+        shell: bash
+        run: |
+          mkdir -p npm-binary/bin
+
+          # Windows: 复制独立 .exe 可执行文件
+          if [ "${{ matrix.npm_pkg }}" = "win32-x64" ]; then
+            cp src-tauri/target/release/claude-code-reader.exe npm-binary/bin/ClaudeCodeReader.exe
+            echo "Prepared: Windows exe for NPM package"
+          fi
+
+          # macOS ARM64: 复制完整的 .app 应用束目录
+          if [ "${{ matrix.npm_pkg }}" = "darwin-arm64" ]; then
+            cp -R src-tauri/target/aarch64-apple-darwin/release/bundle/macos/ClaudeCodeReader.app npm-binary/bin/ClaudeCodeReader.app
+            echo "Prepared: macOS ARM64 .app for NPM package"
+          fi
+
+          # macOS x64: 复制完整的 .app 应用束目录
+          if [ "${{ matrix.npm_pkg }}" = "darwin-x64" ]; then
+            cp -R src-tauri/target/x86_64-apple-darwin/release/bundle/macos/ClaudeCodeReader.app npm-binary/bin/ClaudeCodeReader.app
+            echo "Prepared: macOS x64 .app for NPM package"
+          fi
+
+          # Linux: 复制 AppImage 文件
+          if [ "${{ matrix.npm_pkg }}" = "linux-x64" ]; then
+            cp src-tauri/target/release/bundle/appimage/*.AppImage npm-binary/bin/ClaudeCodeReader.AppImage
+            echo "Prepared: Linux AppImage for NPM package"
+          fi
+
+          echo "=== NPM binary directory ==="
+          ls -laR npm-binary/
+
+      # 上传 NPM 二进制 artifact，供 publish-npm Job 下载使用。
+      # artifact 名称格式: npm-{platform}（如 npm-win32-x64），
+      # 用于在 publish-npm Job 中按平台标识下载对应的二进制文件。
+      - name: Upload NPM binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-${{ matrix.npm_pkg }}
+          path: npm-binary/
+          retention-days: 1    # artifact 仅用于同次工作流内传递，1 天后自动清理
+
   # ===========================================================================
-  # Job 4: 发布 NPM 包
+  # Job 4: 发布 NPM 包（平台专属包 + 主包）
   # 仅在正式发布时执行（Tag 推送或手动触发），预发布不发布到 NPM。
-  # 在所有平台构建完成后，将 npm/ 目录作为独立包发布到 NPM Registry。
-  # 用户通过 `npm install -g claude-code-reader` 安装后，
-  # postinstall 脚本会自动从 GitHub Releases 下载对应平台的二进制文件。
+  #
+  # 采用平台专属包架构：
+  # 1. 先发布 4 个平台包（claude-code-reader-{platform}），每个包含对应平台的二进制文件
+  # 2. 再发布主包（claude-code-reader），通过 optionalDependencies 引用平台包
+  # npm 安装主包时会根据当前系统自动选择并安装匹配的平台包。
   # ===========================================================================
   publish-npm:
     needs: [prepare, build-tauri]    # 等待元数据准备和所有平台构建完成
@@ -380,44 +442,153 @@ jobs:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'    # 配置 NPM Registry 地址
 
-      # 从 Git 标签同步版本号到 package.json
-      # 例如标签 v0.1.0-beta.4 → npm version 0.1.0-beta.4
-      - name: Update version from release tag
-        working-directory: npm
-        run: |
-          # 从 prepare Job 获取 tag 名称，去掉 'v' 前缀得到版本号
-          TAG_NAME="${{ needs.prepare.outputs.tag_name }}"
-          VERSION="${TAG_NAME#v}"
-          npm version $VERSION --no-git-tag-version --allow-same-version
+      # 下载所有平台的 NPM 二进制 artifact 到 platform-artifacts/ 目录。
+      # 每个 artifact 以 npm-{platform} 命名，下载后目录结构为：
+      # platform-artifacts/
+      #   npm-win32-x64/bin/ClaudeCodeReader.exe
+      #   npm-darwin-arm64/bin/ClaudeCodeReader.app/
+      #   npm-darwin-x64/bin/ClaudeCodeReader.app/
+      #   npm-linux-x64/bin/ClaudeCodeReader.AppImage
+      - name: Download all NPM binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: npm-*
+          path: platform-artifacts/
 
-      # 使用 sed 命令替换 postinstall.js 中硬编码的 VERSION 常量值，
-      # 确保安装后脚本下载的是与当前发布版本匹配的二进制文件
-      - name: Update postinstall script version
-        working-directory: npm
-        run: |
-          TAG_NAME="${{ needs.prepare.outputs.tag_name }}"
-          VERSION="${TAG_NAME#v}"
-          sed -i "s/const VERSION = '.*'/const VERSION = '$VERSION'/" scripts/postinstall.js
-
-      # 修复 package.json 中可能存在的格式问题（如缺少必要字段）
-      - name: Fix package.json
-        working-directory: npm
-        run: npm pkg fix
-
-      # 发布到 NPM Registry
-      # - 如果版本号包含 'beta' 或 'alpha'，使用 --tag beta 发布，
-      #   这样 `npm install claude-code-reader` 不会安装到预发布版本，
-      #   用户需要显式指定 `npm install claude-code-reader@beta` 才能安装
-      # - 正式版本则发布到默认的 'latest' 标签
-      - name: Publish to NPM
-        working-directory: npm
+      # 从 Git 标签提取版本号，供后续发布步骤使用
+      - name: Determine version and NPM tag
+        id: npm_info
         run: |
           TAG_NAME="${{ needs.prepare.outputs.tag_name }}"
           VERSION="${TAG_NAME#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+          # 判断 NPM 发布标签：beta/alpha 版本使用 --tag beta，正式版使用 latest
           if [[ "$VERSION" == *"beta"* ]] || [[ "$VERSION" == *"alpha"* ]]; then
-            npm publish --access public --tag beta
+            echo "npm_tag=beta" >> "$GITHUB_OUTPUT"
           else
-            npm publish --access public
+            echo "npm_tag=latest" >> "$GITHUB_OUTPUT"
           fi
+
+          echo "Version: $VERSION, NPM tag: $(if [[ "$VERSION" == *"beta"* ]] || [[ "$VERSION" == *"alpha"* ]]; then echo beta; else echo latest; fi)"
+
+      # -----------------------------------------------------------------------
+      # 循环发布 4 个平台专属包
+      # 对每个平台：
+      # 1. 创建临时发布目录
+      # 2. 动态生成 package.json（包含 name、version、os、cpu 等字段）
+      # 3. 复制对应平台的二进制文件到 bin/ 目录
+      # 4. 执行 npm publish 发布到 NPM Registry
+      #
+      # 平台包必须先于主包发布，否则主包的 optionalDependencies 无法解析。
+      # -----------------------------------------------------------------------
+      - name: Publish platform packages
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}    # NPM 发布凭证（在仓库 Secrets 中配置）
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          VERSION="${{ steps.npm_info.outputs.version }}"
+          NPM_TAG="${{ steps.npm_info.outputs.npm_tag }}"
+
+          # 定义 4 个平台的配置：包名后缀、os 字段值、cpu 字段值
+          declare -A PLATFORMS
+          PLATFORMS=(
+            ["win32-x64"]="win32 x64"
+            ["darwin-arm64"]="darwin arm64"
+            ["darwin-x64"]="darwin x64"
+            ["linux-x64"]="linux x64"
+          )
+
+          for PLATFORM_KEY in "${!PLATFORMS[@]}"; do
+            read -r OS CPU <<< "${PLATFORMS[$PLATFORM_KEY]}"
+            PKG_NAME="claude-code-reader-${PLATFORM_KEY}"
+            ARTIFACT_DIR="platform-artifacts/npm-${PLATFORM_KEY}"
+
+            echo "========================================="
+            echo "Publishing ${PKG_NAME}@${VERSION}"
+            echo "========================================="
+
+            # 检查 artifact 目录是否存在（构建可能失败导致缺失）
+            if [ ! -d "$ARTIFACT_DIR" ]; then
+              echo "WARNING: Artifact directory not found: $ARTIFACT_DIR, skipping..."
+              continue
+            fi
+
+            # 创建临时发布目录
+            PUBLISH_DIR="publish-${PLATFORM_KEY}"
+            mkdir -p "$PUBLISH_DIR"
+
+            # 复制二进制文件目录
+            cp -R "${ARTIFACT_DIR}/bin" "${PUBLISH_DIR}/bin"
+
+            # 动态生成 package.json
+            # os 和 cpu 字段告诉 npm 此包仅适用于指定的平台和架构，
+            # npm 在安装 optionalDependencies 时会自动跳过不匹配的包。
+            cat > "${PUBLISH_DIR}/package.json" << PKGJSON
+          {
+            "name": "${PKG_NAME}",
+            "version": "${VERSION}",
+            "description": "Platform-specific binary for ClaudeCodeReader (${OS} ${CPU})",
+            "license": "MIT",
+            "repository": {
+              "type": "git",
+              "url": "git+https://github.com/MoYeRanQianZhi/ClaudeCodeReader.git"
+            },
+            "os": ["${OS}"],
+            "cpu": ["${CPU}"],
+            "files": ["bin"]
+          }
+          PKGJSON
+
+            echo "Generated package.json:"
+            cat "${PUBLISH_DIR}/package.json"
+
+            echo "Binary files:"
+            ls -laR "${PUBLISH_DIR}/bin/"
+
+            # 发布到 NPM Registry
+            cd "$PUBLISH_DIR"
+            npm publish --access public --tag "$NPM_TAG"
+            cd ..
+
+            echo "Successfully published ${PKG_NAME}@${VERSION}"
+          done
+
+      # -----------------------------------------------------------------------
+      # 发布主包 claude-code-reader
+      # 更新版本号和 optionalDependencies 中各平台包的版本号后发布。
+      # 主包本身不包含二进制文件，仅包含 ccr.js 入口脚本和平台包引用。
+      # -----------------------------------------------------------------------
+      - name: Publish main package
+        working-directory: npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          VERSION="${{ steps.npm_info.outputs.version }}"
+          NPM_TAG="${{ steps.npm_info.outputs.npm_tag }}"
+
+          # 更新主包版本号
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+
+          # 更新 optionalDependencies 中所有平台包的版本号，
+          # 确保与当前发布的平台包版本一致
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            const deps = pkg.optionalDependencies || {};
+            for (const name of Object.keys(deps)) {
+              deps[name] = '${VERSION}';
+            }
+            pkg.optionalDependencies = deps;
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+
+          echo "Updated package.json:"
+          cat package.json
+
+          # 修复 package.json 中可能存在的格式问题
+          npm pkg fix
+
+          # 发布主包到 NPM Registry
+          npm publish --access public --tag "$NPM_TAG"
+
+          echo "Successfully published claude-code-reader@${VERSION}"

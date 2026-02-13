@@ -133,22 +133,32 @@ CI/CD 配置文件位于 `.github/workflows/release.yml`，实现了从创建发
 
 依赖 `prepare` 和 `create-release` Job 完成后执行。使用策略矩阵（`matrix`）实现 4 个平台/架构的并行构建：
 
-| 平台 | 运行环境 | Rust Target | 构建参数 | 额外步骤 |
-|------|----------|-------------|----------|----------|
-| macOS ARM64 | `macos-latest` | `aarch64-apple-darwin` | `--target aarch64-apple-darwin` | 打包 `.app.tar.gz` 并上传 |
-| macOS x86_64 | `macos-latest` | `x86_64-apple-darwin` | `--target x86_64-apple-darwin` | 打包 `.app.tar.gz` 并上传 |
-| Ubuntu (amd64) | `ubuntu-22.04` | 默认 | 无 | 安装系统依赖库 |
-| Windows (x64) | `windows-latest` | 默认 | `--bundles nsis` | 复制 `.exe` 并上传独立可执行文件 |
+| 平台 | 运行环境 | Rust Target | 构建参数 | NPM 包标识 |
+|------|----------|-------------|----------|------------|
+| macOS ARM64 | `macos-latest` | `aarch64-apple-darwin` | `--target aarch64-apple-darwin` | `darwin-arm64` |
+| macOS x86_64 | `macos-latest` | `x86_64-apple-darwin` | `--target x86_64-apple-darwin` | `darwin-x64` |
+| Ubuntu (amd64) | `ubuntu-22.04` | 默认 | 无 | `linux-x64` |
+| Windows (x64) | `windows-latest` | 默认 | `--bundles nsis` | `win32-x64` |
 
 每个矩阵任务执行以下步骤：
 1. 检出代码
 2. 设置 Node.js 24 和 Rust stable 工具链
 3. 安装系统依赖（仅 Ubuntu）
 4. `npm ci` 安装前端依赖
-5. 使用 `tauri-apps/tauri-action@v0` 执行构建并将产物上传到 GitHub Release
-6. 上传额外的平台专属二进制文件（Windows `.exe`、macOS `.app.tar.gz`）
+5. 使用 `tauri-apps/tauri-action@v0` 执行构建
+6. 收集并重命名产物，上传到 GitHub Release
+7. 准备 NPM 平台包的二进制文件，上传为 GitHub Actions artifact（`npm-{platform}` 格式）
 
-### Job 4: publish-npm
+其中步骤 7 将构建产物复制到 `npm-binary/bin/` 目录并通过 `actions/upload-artifact@v4` 上传，供下游 `publish-npm` Job 使用：
+
+| 平台 | 二进制文件 | Artifact 名称 |
+|------|-----------|---------------|
+| Windows | `bin/ClaudeCodeReader.exe` | `npm-win32-x64` |
+| macOS ARM64 | `bin/ClaudeCodeReader.app/` | `npm-darwin-arm64` |
+| macOS x64 | `bin/ClaudeCodeReader.app/` | `npm-darwin-x64` |
+| Linux | `bin/ClaudeCodeReader.AppImage` | `npm-linux-x64` |
+
+### Job 4: publish-npm（平台专属包架构）
 
 | 项目 | 详情 |
 |------|------|
@@ -158,12 +168,30 @@ CI/CD 配置文件位于 `.github/workflows/release.yml`，实现了从创建发
 
 > **注意：** 预发布版本不会发布到 NPM，避免污染包版本。用户只能从 GitHub Release 下载预发布构建产物。
 
+#### NPM 发布架构
+
+采用平台专属包模式（类似 esbuild/swc 等项目的成熟模式）：
+
+1. **平台包**：为每个平台发布独立的 NPM 包，包含预编译的二进制文件
+2. **主包**：通过 `optionalDependencies` 引用平台包，npm 根据当前平台自动安装对应的包
+
+| NPM 包名 | `os` | `cpu` | 包含的二进制文件 |
+|----------|------|-------|-----------------|
+| `claude-code-reader-win32-x64` | `win32` | `x64` | `bin/ClaudeCodeReader.exe` |
+| `claude-code-reader-darwin-arm64` | `darwin` | `arm64` | `bin/ClaudeCodeReader.app/` |
+| `claude-code-reader-darwin-x64` | `darwin` | `x64` | `bin/ClaudeCodeReader.app/` |
+| `claude-code-reader-linux-x64` | `linux` | `x64` | `bin/ClaudeCodeReader.AppImage` |
+
+#### 发布步骤
+
 | 步骤 | 说明 |
 |------|------|
-| 更新版本号 | 从 Git 标签提取版本号，写入 `npm/package.json` |
-| 更新 postinstall 版本 | 使用 `sed` 替换 `postinstall.js` 中的 `VERSION` 常量 |
-| 修复 package.json | `npm pkg fix` 确保 package.json 规范 |
-| 发布 | beta/alpha 版本使用 `--tag beta` 标签发布，正式版直接发布 |
+| 下载 artifact | 通过 `actions/download-artifact@v4` 下载所有 `npm-*` artifact |
+| 确定版本号 | 从 Git 标签提取版本号，判断 NPM 发布标签（beta/latest） |
+| 发布平台包 | 循环为每个平台动态生成 `package.json` 并执行 `npm publish` |
+| 发布主包 | 更新 `npm/package.json` 版本号和 `optionalDependencies` 后执行 `npm publish` |
+
+> **重要：** 平台包必须先于主包发布，否则主包的 `optionalDependencies` 无法解析。
 
 发布认证使用 `NPM_TOKEN` Secret。
 
@@ -186,7 +214,7 @@ CI/CD 配置文件位于 `.github/workflows/release.yml`，实现了从创建发
 | `claude-code-reader/src-tauri/tauri.conf.json` | `"version"` |
 | `claude-code-reader/npm/package.json` | `"version"` |
 
-> **注意：** `npm/scripts/postinstall.js` 中的 `VERSION` 常量由 CI 自动更新，无需手动修改。
+> **注意：** `npm/package.json` 中的 `optionalDependencies` 版本号由 CI 自动更新，无需手动修改。
 
 #### 第 2 步：提交并打标签
 
