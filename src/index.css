@@ -221,6 +221,34 @@
     }
   }
 
+  /* ---------- 渐变文字效果 ---------- */
+
+  /* 渐变文字：紫色到粉色的线性渐变，通过 background-clip: text 裁剪实现文字填色 */
+  .gradient-text {
+    background: linear-gradient(135deg, #a78bfa 0%, #ec4899 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  /* 渐变背景动画：配合 gradient-text 使用，使渐变色循环流动 */
+  .animate-gradient {
+    background-size: 200% 200%;
+    animation: gradient 8s ease infinite;
+  }
+
+  @keyframes gradient {
+    0% {
+      background-position: 0% 50%;
+    }
+    50% {
+      background-position: 100% 50%;
+    }
+    100% {
+      background-position: 0% 50%;
+    }
+  }
+
   /* ---------- 悬停效果 ---------- */
 
   /* 悬停上浮效果：鼠标悬停时元素轻微上移并加深阴影 */
@@ -263,6 +291,7 @@
     border-radius: 0.75rem;
     margin: 0.5rem 0;
     transition: all 0.2s ease;
+    overflow: hidden;
   }
 
   /* 工具图标：与工具名称对齐的间距 */
@@ -279,6 +308,7 @@
     border-radius: 0.75rem;
     margin: 0.5rem 0;
     transition: all 0.2s ease;
+    overflow: hidden;
   }
 
   /* 工具结果错误状态：红色边框 + 淡红色背景 */
@@ -296,6 +326,7 @@
     margin: 0.5rem 0;
     transition: all 0.2s ease;
     opacity: 0.85;
+    overflow: hidden;
   }
 
   /* 图片内容块 */
@@ -353,21 +384,42 @@
   }
 
   .custom-scrollbar::-webkit-scrollbar-thumb {
-    background: #cbd5e1;
+    background: #c4b5fd;
     border-radius: 3px;
     transition: all 0.2s ease;
   }
 
   .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-    background: #94a3b8;
+    background: #a78bfa;
   }
 
   .dark .custom-scrollbar::-webkit-scrollbar-thumb {
-    background: #3f3f46;
+    background: #4c3a8a;
   }
 
   .dark .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-    background: #52525b;
+    background: #7c5cbf;
+  }
+
+  /* ---------- 侧边栏渐变背景 ---------- */
+
+  /* 侧边栏柔和渐变：天蓝色顶部到淡紫色底部，营造清新视觉层次 */
+  .sidebar-gradient {
+    background: linear-gradient(180deg, #eef6ff 0%, #f3eeff 100%);
+  }
+
+  .dark .sidebar-gradient {
+    background: linear-gradient(180deg, #0f1a2e 0%, #1a1530 100%);
+  }
+
+  /* ---------- 渐变加载旋转器 ---------- */
+
+  /* 紫粉渐变旋转器：替代单色 border 旋转器，与紫色主题配色一致 */
+  .gradient-spinner {
+    border-radius: 50%;
+    border: 3px solid var(--border);
+    border-top-color: #a78bfa;
+    border-right-color: #ec4899;
   }
 
   /* ---------- Tailwind CSS 工具类后备 ---------- */
@@ -396,11 +448,18 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--muted-foreground);
-  opacity: 0.3;
+  background: #c4b5fd;
   border-radius: 9999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  opacity: 0.5;
+  background: #a78bfa;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: #4c3a8a;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #7c5cbf;
 }

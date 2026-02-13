@@ -1,6 +1,6 @@
 # 组件文档
 
-本文档详细记录 ClaudeCodeReader (CCR) 前端的 5 个 React 组件，包括每个组件的概述、Props 接口、内部状态、功能特性、关键逻辑和渲染结构。
+本文档详细记录 ClaudeCodeReader (CCR) 前端的 7 个 React 组件，包括每个组件的概述、Props 接口、内部状态、功能特性、关键逻辑和渲染结构。
 
 ---
 
@@ -11,6 +11,8 @@
 3. [ChatView — 聊天视图](#3-chatview--聊天视图)
 4. [SettingsPanel — 设置面板](#4-settingspanel--设置面板)
 5. [EnvSwitcher — 环境切换器](#5-envswitcher--环境切换器)
+6. [MessageBlockList — 消息内容块列表](#6-messageblocklist--消息内容块列表)
+7. [MessageContentRenderer — 消息内容块渲染器](#7-messagecontentrenderer--消息内容块渲染器)
 
 ---
 
@@ -20,13 +22,21 @@
 
 ### 组件概述
 
-App 是应用的根组件，也是唯一使用默认导出（`export default`）的组件。它承担全局状态管理中枢的角色，定义了 11 个状态变量、2 个 `useEffect` 副作用和 10 个 `useCallback` 回调函数，协调所有子组件之间的数据流。
+App 是应用的根组件，也是唯一使用默认导出（`export default`）的组件。它承担全局状态管理中枢的角色，定义了 16 个状态变量、1 个 ref、3 个 `useEffect` 副作用和 18 个 `useCallback` 回调函数，协调所有子组件之间的数据流。
 
 ### Props 接口
 
 App 是根组件，不接收任何 Props。
 
-### 内部 State（11 个状态变量）
+### 常量
+
+| 常量名 | 值 | 说明 |
+|--------|-----|------|
+| `SIDEBAR_COLLAPSE_THRESHOLD` | `160` | 侧边栏自动折叠阈值（px）：拖动宽度低于此值松开后自动折叠 |
+| `SIDEBAR_MIN_WIDTH` | `220` | 侧边栏最小宽度（px）：宽度回弹下限 |
+| `SIDEBAR_DEFAULT_WIDTH` | `320` | 侧边栏默认宽度（px）：初始宽度，折叠后重新展开时恢复此值 |
+
+### 内部 State（16 个状态变量）
 
 | 变量名 | 类型 | 初始值 | 说明 |
 |--------|------|--------|------|
@@ -36,12 +46,23 @@ App 是根组件，不接收任何 Props。
 | `currentSession` | `Session \| null` | `null` | 用户当前选中的会话，选中后加载对应的消息列表 |
 | `messages` | `SessionMessage[]` | `[]` | 当前选中会话的消息列表，从 JSONL 文件解析而来 |
 | `settings` | `ClaudeSettings` | `{}` | Claude Code 的设置数据，对应 `settings.json` |
-| `envConfig` | `EnvSwitcherConfig` | `{ profiles: [], activeProfileId: null }` | 环境配置切换器的完整状态，包括所有配置和当前激活的配置 ID |
+| `envConfig` | `EnvSwitcherConfig` | `{ profiles: [], activeProfileId: null }` | 环境配置切换器的完整状态 |
 | `showSettings` | `boolean` | `false` | 控制设置面板模态框的显示/隐藏 |
-| `editingEnvProfile` | `EnvProfile \| null` | `null` | 正在编辑的环境配置对象；非 null 时，设置面板切换为"配置编辑模式" |
-| `theme` | `'light' \| 'dark' \| 'system'` | `'system'` | 当前主题模式，影响全局 CSS 类 |
+| `editingEnvProfile` | `EnvProfile \| null` | `null` | 正在编辑的环境配置对象；非 null 时设置面板进入"配置编辑模式" |
+| `theme` | `'light' \| 'dark' \| 'system'` | `'system'` | 当前主题模式 |
 | `loading` | `boolean` | `true` | 应用初始化加载中标志 |
-| `error` | `string \| null` | `null` | 初始化过程中的错误信息，非 null 时显示错误页面 |
+| `error` | `string \| null` | `null` | 初始化过程中的错误信息 |
+| `selectedMessages` | `Set<string>` | `new Set()` | 已选中的消息 UUID 集合（多选模式） |
+| `selectionMode` | `boolean` | `false` | 选择模式开关 |
+| `sidebarCollapsed` | `boolean` | `false` | 侧边栏折叠状态 |
+| `sidebarWidth` | `number` | `320`（`SIDEBAR_DEFAULT_WIDTH`） | 侧边栏宽度（像素），可拖动调整 |
+| `isResizingSidebar` | `boolean` | `false` | 是否正在拖动调整侧边栏宽度 |
+
+### Ref
+
+| Ref 名 | 类型 | 说明 |
+|--------|------|------|
+| `isResizingRef` | `boolean` | 追踪拖动状态，避免全局事件监听器中的闭包陈旧问题 |
 
 ### 功能特性
 
@@ -49,34 +70,31 @@ App 是根组件，不接收任何 Props。
 - **主题切换**：支持浅色/深色/跟随系统三种模式
 - **会话选择与消息加载**：选中会话后从文件系统异步加载消息
 - **消息编辑**：调用 `editMessageContent` 修改消息内容并更新状态
-- **消息删除**：弹出确认对话框后调用 `deleteMessage` 删除消息
+- **消息删除**：直接调用 `deleteMessage` 删除消息
+- **消息多选**：切换选择模式、全选/取消、批量删除
+- **会话删除**：从文件系统删除会话文件，刷新项目列表
+- **会话导出**：支持 Markdown 和 JSON 两种格式导出到本地文件
 - **设置保存**：将修改后的设置写回 `settings.json`
-- **环境配置切换**：应用指定的环境配置到 settings 并持久化
-- **环境配置保存**：将当前环境变量快照保存为新配置
-- **环境配置编辑**：打开设置面板并预填充选定配置的环境变量
-- **环境配置删除**：从配置列表中移除指定配置
+- **环境配置管理**：切换、保存、编辑、删除环境配置
+- **侧边栏拖动调整宽度**：全局鼠标事件监听实现拖动，支持自动折叠和最小宽度回弹
+- **侧边栏折叠/展开**：点击按钮或拖动低于阈值自动折叠
 
 ### 关键逻辑
 
-#### useEffect #1 — 主题应用
+#### useEffect #1 — 侧边栏拖动调整
 
-监听 `theme` 状态变化，在 `document.documentElement` 上切换 `dark` CSS 类：
+全局 `document.addEventListener('mousemove' / 'mouseup')` 监听，使用 `isResizingRef`（ref）判断拖动状态避免闭包陈旧问题。`mouseup` 时根据最终宽度决定：
 
-```tsx
-useEffect(() => {
-  const root = document.documentElement;
-  if (theme === 'system') {
-    const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    root.classList.toggle('dark', isDark);
-  } else {
-    root.classList.toggle('dark', theme === 'dark');
-  }
-}, [theme]);
-```
+- `< SIDEBAR_COLLAPSE_THRESHOLD`（160px）→ 自动折叠，重置宽度为默认值
+- `< SIDEBAR_MIN_WIDTH`（220px）→ 回弹到最小宽度
 
-#### useEffect #2 — 应用初始化
+#### useEffect #2 — 主题应用
 
-组件挂载后执行一次（空依赖数组），并行加载三项数据：
+监听 `theme` 状态变化，在 `document.documentElement` 上切换 `dark` CSS 类。`'system'` 模式通过 `window.matchMedia` 检测系统偏好。
+
+#### useEffect #3 — 应用初始化
+
+组件挂载后执行一次，并行加载三项数据：
 
 ```tsx
 const [loadedSettings, loadedProjects, loadedEnvConfig] = await Promise.all([
@@ -86,34 +104,32 @@ const [loadedSettings, loadedProjects, loadedEnvConfig] = await Promise.all([
 ]);
 ```
 
-#### 10 个 useCallback 回调
+#### 18 个 useCallback 回调
 
 | 回调函数 | 依赖 | 说明 |
 |----------|------|------|
-| `handleSelectSession` | `[]` | 选中会话 → 读取消息 → 更新 messages |
+| `handleSidebarResizeStart` | `[]` | 开始拖动，设置标志和全局光标 |
+| `handleSelectSession` | `[]` | 选中会话 → 读取消息，清空多选状态 |
 | `handleRefresh` | `[currentSession]` | 重新读取当前会话的消息 |
 | `handleEditMessage` | `[currentSession]` | 编辑指定 UUID 的消息内容 |
-| `handleDeleteMessage` | `[currentSession]` | 确认后删除指定 UUID 的消息 |
+| `handleDeleteMessage` | `[currentSession]` | 删除指定 UUID 的消息 |
+| `handleToggleSelect` | `[]` | 切换单条消息的选中状态 |
+| `handleSelectAll` | `[]` | 全选传入的所有消息 UUID |
+| `handleDeselectAll` | `[]` | 取消所有消息的选中状态 |
+| `handleDeleteSelected` | `[currentSession, selectedMessages]` | 批量删除已选消息 |
+| `handleToggleSelectionMode` | `[]` | 切换选择模式 |
+| `handleDeleteSession` | `[claudeDataPath, currentSession]` | 删除会话文件并刷新项目列表 |
+| `handleExport` | `[currentSession, messages]` | 导出会话为 Markdown/JSON |
 | `handleSaveSettings` | `[claudeDataPath]` | 保存设置到文件系统 |
 | `handleSwitchEnvProfile` | `[claudeDataPath, envConfig]` | 切换到指定环境配置 |
 | `handleSaveEnvProfile` | `[claudeDataPath]` | 将当前环境保存为新配置 |
 | `handleDeleteEnvProfile` | `[claudeDataPath, envConfig]` | 删除指定环境配置 |
 | `handleEditEnvProfile` | `[]` | 设置 editingEnvProfile 并打开设置面板 |
-| `handleSaveEditedProfile` | `[claudeDataPath, envConfig]` | 保存编辑后的配置，并在激活时同步更新 settings |
+| `handleSaveEditedProfile` | `[claudeDataPath, envConfig]` | 保存编辑后的配置 |
 
 #### SettingsPanel 双模式逻辑
 
 通过 `editingEnvProfile` 是否为 null 来决定设置面板的行为模式：
-
-```tsx
-<SettingsPanel
-  settings={editingEnvProfile ? { ...settings, env: editingEnvProfile.env } : settings}
-  onSaveSettings={editingEnvProfile ?
-    (newSettings) => handleSaveEditedProfile({ ...editingEnvProfile, env: newSettings.env || {} })
-    : handleSaveSettings
-  }
-/>
-```
 
 - **普通模式**（`editingEnvProfile === null`）：显示并编辑全局 settings
 - **配置编辑模式**（`editingEnvProfile !== null`）：显示选定配置的 env，保存时仅更新该配置
@@ -121,13 +137,16 @@ const [loadedSettings, loadedProjects, loadedEnvConfig] = await Promise.all([
 ### 渲染结构
 
 ```
-App
-├── [loading 状态] → 加载动画（旋转圆圈 + 提示文字）
+App (h-screen w-screen overflow-hidden flex relative)
+├── [loading 状态] → 加载动画（渐变旋转器 + 提示文字）
 ├── [error 状态]   → 错误页面（警告图标 + 错误信息 + 重试按钮）
 └── [正常状态]     → flex 水平布局
-    ├── Sidebar         → 左侧固定宽度（18rem / w-72）
-    ├── ChatView        → 右侧弹性区域（flex-1）
-    └── SettingsPanel   → 全屏模态覆盖层（条件渲染，仅 showSettings 时显示）
+    ├── AnimatePresence
+    │   └── [!sidebarCollapsed] Sidebar (motion.div, 动态宽度)
+    ├── 拖动手柄 (absolute, z-20, cursor-col-resize)
+    ├── ChatView (flex-1, min-w-0)
+    └── AnimatePresence
+        └── [showSettings] SettingsPanel (fixed, z-50 模态覆盖层)
 ```
 
 ---
@@ -138,9 +157,9 @@ App
 
 ### 组件概述
 
-Sidebar 是应用的左侧导航组件，宽度固定为 `w-72`（18rem）。它提供项目浏览、会话选择、搜索过滤和环境配置切换功能。内部嵌入了 `EnvSwitcher` 子组件。
+Sidebar 是应用的左侧导航组件，使用 `motion.div` 实现可动画化的宽度控制。它提供项目浏览、会话选择、搜索过滤、会话删除和环境配置切换功能。内部嵌入了 `EnvSwitcher` 子组件。侧边栏采用天蓝色到淡紫色的渐变背景，标题使用紫粉渐变流动动画。
 
-### Props 接口
+### Props 接口（14 个属性）
 
 ```tsx
 interface SidebarProps {
@@ -148,13 +167,17 @@ interface SidebarProps {
   currentProject: Project | null;
   currentSession: Session | null;
   envConfig: EnvSwitcherConfig;
+  width: number;
+  isResizing: boolean;
   onSelectProject: (project: Project) => void;
   onSelectSession: (session: Session) => void;
+  onDeleteSession: (sessionFilePath: string) => void;
   onOpenSettings: () => void;
   onSwitchEnvProfile: (profile: EnvProfile) => void;
   onSaveEnvProfile: (name: string) => void;
   onDeleteEnvProfile: (profileId: string) => void;
   onEditEnvProfile: (profile: EnvProfile) => void;
+  onCollapse: () => void;
 }
 ```
 
@@ -164,13 +187,17 @@ interface SidebarProps {
 | `currentProject` | `Project \| null` | 当前选中的项目，用于高亮显示 |
 | `currentSession` | `Session \| null` | 当前选中的会话，用于高亮显示 |
 | `envConfig` | `EnvSwitcherConfig` | 环境配置数据，传递给 EnvSwitcher 子组件 |
-| `onSelectProject` | `(project: Project) => void` | 点击项目时的回调，更新 currentProject |
-| `onSelectSession` | `(session: Session) => void` | 点击会话时的回调，触发消息加载 |
+| `width` | `number` | 侧边栏宽度（px），由父组件管理 |
+| `isResizing` | `boolean` | 是否正在拖动调整宽度，为 true 时禁用过渡动画 |
+| `onSelectProject` | `(project: Project) => void` | 点击项目时的回调 |
+| `onSelectSession` | `(session: Session) => void` | 点击会话时的回调 |
+| `onDeleteSession` | `(sessionFilePath: string) => void` | 删除会话的回调 |
 | `onOpenSettings` | `() => void` | 点击设置按钮的回调 |
-| `onSwitchEnvProfile` | `(profile: EnvProfile) => void` | 切换环境配置的回调，透传给 EnvSwitcher |
-| `onSaveEnvProfile` | `(name: string) => void` | 保存当前环境为新配置的回调，透传给 EnvSwitcher |
-| `onDeleteEnvProfile` | `(profileId: string) => void` | 删除环境配置的回调，透传给 EnvSwitcher |
-| `onEditEnvProfile` | `(profile: EnvProfile) => void` | 编辑环境配置的回调，透传给 EnvSwitcher |
+| `onSwitchEnvProfile` | `(profile: EnvProfile) => void` | 切换环境配置的回调 |
+| `onSaveEnvProfile` | `(name: string) => void` | 保存当前环境为新配置的回调 |
+| `onDeleteEnvProfile` | `(profileId: string) => void` | 删除环境配置的回调 |
+| `onEditEnvProfile` | `(profile: EnvProfile) => void` | 编辑环境配置的回调 |
+| `onCollapse` | `() => void` | 折叠侧边栏的回调 |
 
 ### 内部 State
 
@@ -182,12 +209,16 @@ interface SidebarProps {
 ### 功能特性
 
 - **搜索过滤**：支持按项目路径和会话 ID 进行模糊搜索（大小写不敏感）
-- **项目展开/折叠**：点击项目头部切换展开状态，使用 `Set` 管理多个项目的展开状态
+- **项目展开/折叠**：点击项目头部切换展开状态，使用 `Set` 管理多个项目的展开状态，展开/折叠带有高度+透明度过渡动画
+- **会话列表交错动画**：展开项目时会话条目使用 staggered animation（`delay: sessionIndex * 0.03`）逐一入场
+- **会话删除**：每个会话条目悬停时显示删除按钮（`opacity-0 → group-hover:opacity-100`）
 - **会话数量徽章**：每个项目右侧显示会话数量
 - **项目路径显示**：主文字显示路径最后一段（项目名），副文字显示完整路径
-- **选中高亮**：当前选中的项目和会话添加 `bg-accent` 背景色
+- **选中高亮**：当前选中的项目和会话添加 `bg-accent` 背景色，选中会话加左侧 `border-primary` 标记
 - **底部统计**：显示总项目数和总会话数
 - **环境切换器嵌入**：在头部区域嵌入 EnvSwitcher 组件
+- **设置齿轮旋转**：设置按钮悬停时齿轮图标旋转 180°（spring 动画），使用 variant 传播机制
+- **渐变背景与标题**：`sidebar-gradient` 渐变背景，`gradient-text animate-gradient` 流动标题
 
 ### 关键逻辑
 
@@ -201,47 +232,56 @@ const filteredProjects = projects.filter(
 );
 ```
 
-同时匹配项目路径和项目下的会话 ID，只要有任一匹配则保留整个项目。
-
-#### 展开/折叠切换
+#### 设置图标旋转动画（variant 传播）
 
 ```tsx
-const toggleProject = (projectPath: string) => {
-  const newExpanded = new Set(expandedProjects);
-  if (newExpanded.has(projectPath)) {
-    newExpanded.delete(projectPath);
-  } else {
-    newExpanded.add(projectPath);
-  }
-  setExpandedProjects(newExpanded);
-};
+<motion.button whileHover="hover" whileTap={{ scale: 0.95 }}>
+  <motion.div
+    variants={{ hover: { rotate: 180 } }}
+    transition={{ type: "spring", stiffness: 300, damping: 15 }}
+  >
+    <Settings className="w-5 h-5" />
+  </motion.div>
+</motion.button>
 ```
 
-使用 `Set` 的不可变更新模式——创建新 `Set`，修改后 `setState`。
+父元素 `whileHover="hover"` 将 variant 名称传播给子 `motion.div`，确保鼠标在按钮任意区域悬停都能触发图标旋转。
 
-#### 项目名称提取
-
-从 Windows 风格的路径中提取最后一段作为显示名：
+#### 宽度约束
 
 ```tsx
-{project.path.split('\\').pop() || project.path}
+<motion.div
+  animate={{ width, opacity: 1 }}
+  transition={isResizing ? { duration: 0 } : { duration: 0.2, ease: [0.4, 0, 0.2, 1] }}
+  style={{ flexShrink: 0, minWidth: 0, overflow: 'hidden' }}
+>
 ```
+
+- `minWidth: 0` 覆盖 flex 子项默认的 `min-width: auto`
+- `flexShrink: 0` 防止被 flex 容器压缩
+- `overflow: 'hidden'` 用于展开/收起动画时裁剪过渡帧
+- 拖动时 `transition.duration: 0` 禁用动画，确保实时跟手
 
 ### 渲染结构
 
 ```
-Sidebar (w-72, flex-col, bg-card)
-├── 头部区域 (border-b)
-│   ├── 标题行（"Claude Code Reader" + 设置齿轮图标按钮）
+Sidebar (motion.div, 动态 width, sidebar-gradient, border-r)
+├── 头部区域 (border-b, relative z-10)
+│   ├── 标题行
+│   │   ├── "Claude Code Reader" (gradient-text animate-gradient)
+│   │   ├── 设置按钮 (motion.button + 齿轮旋转 motion.div)
+│   │   └── 折叠按钮 (motion.button + ChevronLeft)
 │   ├── EnvSwitcher 组件
-│   └── 搜索输入框（带搜索图标前缀）
-├── 项目列表区域 (flex-1, overflow-y-auto)
-│   ├── [空状态提示]（"没有找到匹配的项目"或"没有找到任何项目"）
+│   └── 搜索输入框 (Search 图标 + input)
+├── 项目列表区域 (flex-1, overflow-y/x-auto, custom-scrollbar)
+│   ├── [空状态提示]
 │   └── 项目条目（循环渲染）
-│       ├── 项目头按钮（展开箭头 + 项目名 + 路径 + 会话数徽章）
-│       └── [展开时] 会话列表
-│           └── 会话按钮（会话名/ID + 时间戳）
-└── 底部信息栏 (border-t)
+│       ├── 项目头 (motion.button + 旋转箭头 + 项目名 + 路径 + 会话数徽章)
+│       └── AnimatePresence > [展开时] motion.div (height auto 动画)
+│           └── 会话条目 (motion.div, staggered animation)
+│               ├── 会话名/ID + 时间戳
+│               └── 删除按钮 (motion.button, group-hover 显示)
+└── 底部信息栏 (border-t, whitespace-nowrap)
     └── "共 X 个项目，Y 个会话"
 ```
 
@@ -253,9 +293,9 @@ Sidebar (w-72, flex-col, bg-card)
 
 ### 组件概述
 
-ChatView 是应用的主内容区域，占据侧边栏右侧的全部剩余空间。它负责展示当前会话的消息列表，支持消息过滤、编辑、删除、复制和自动滚动。
+ChatView 是应用的主内容区域，占据侧边栏右侧的全部剩余空间（`flex-1 min-w-0`）。它负责展示当前会话的消息列表，支持消息搜索、角色过滤、编辑、删除、复制、多选批量操作、导出和 Token 统计。消息内容通过 `MessageBlockList` 组件实现结构化渲染。
 
-### Props 接口
+### Props 接口（15 个属性）
 
 ```tsx
 interface ChatViewProps {
@@ -264,108 +304,148 @@ interface ChatViewProps {
   onEditMessage: (uuid: string, newContent: string) => void;
   onDeleteMessage: (uuid: string) => void;
   onRefresh: () => void;
+  onExport: (format: 'markdown' | 'json') => void;
+  selectionMode: boolean;
+  selectedMessages: Set<string>;
+  onToggleSelect: (uuid: string) => void;
+  onSelectAll: (uuids: string[]) => void;
+  onDeselectAll: () => void;
+  onDeleteSelected: () => void;
+  onToggleSelectionMode: () => void;
+  sidebarCollapsed: boolean;
+  onExpandSidebar: () => void;
 }
 ```
 
 | 属性 | 类型 | 说明 |
 |------|------|------|
 | `session` | `Session \| null` | 当前选中的会话对象；为 null 时显示空状态占位 |
-| `messages` | `SessionMessage[]` | 当前会话的完整消息列表（含所有类型） |
-| `onEditMessage` | `(uuid: string, newContent: string) => void` | 编辑消息完成后的回调 |
-| `onDeleteMessage` | `(uuid: string) => void` | 删除消息的回调（App 层处理确认弹窗） |
+| `messages` | `SessionMessage[]` | 当前会话的完整消息列表 |
+| `onEditMessage` | `(uuid, newContent) => void` | 编辑消息完成后的回调 |
+| `onDeleteMessage` | `(uuid) => void` | 删除消息的回调 |
 | `onRefresh` | `() => void` | 刷新当前会话消息的回调 |
+| `onExport` | `(format) => void` | 导出会话的回调 |
+| `selectionMode` | `boolean` | 多选模式开关 |
+| `selectedMessages` | `Set<string>` | 已选中的消息 UUID 集合 |
+| `onToggleSelect` | `(uuid) => void` | 切换单条消息选中状态 |
+| `onSelectAll` | `(uuids) => void` | 全选可见消息 |
+| `onDeselectAll` | `() => void` | 取消全选 |
+| `onDeleteSelected` | `() => void` | 批量删除已选消息 |
+| `onToggleSelectionMode` | `() => void` | 切换选择模式 |
+| `sidebarCollapsed` | `boolean` | 侧边栏是否折叠 |
+| `onExpandSidebar` | `() => void` | 展开侧边栏的回调 |
 
 ### 内部 State
 
 | 变量名 | 类型 | 初始值 | 说明 |
 |--------|------|--------|------|
-| `editingId` | `string \| null` | `null` | 正在编辑的消息 UUID，非 null 时该消息切换为编辑模式 |
-| `editContent` | `string` | `''` | 编辑输入框中的当前文本内容 |
-| `filter` | `'all' \| 'user' \| 'assistant'` | `'all'` | 消息过滤器，控制显示哪些类型的消息 |
+| `editingId` | `string \| null` | `null` | 正在编辑的消息 UUID |
+| `editContent` | `string` | `''` | 编辑输入框的当前文本 |
+| `filter` | `'all' \| 'user' \| 'assistant'` | `'all'` | 消息过滤器 |
+| `searchQuery` | `string` | `''` | 搜索关键词 |
+| `showFilterDropdown` | `boolean` | `false` | 过滤器下拉菜单的显示状态 |
+| `showExportDropdown` | `boolean` | `false` | 导出下拉菜单的显示状态 |
 
 ### Ref
 
 | Ref 名 | 类型 | 说明 |
 |--------|------|------|
-| `messagesEndRef` | `HTMLDivElement` | 消息列表底部的锚点元素，用于滚动到底部 |
+| `messagesEndRef` | `HTMLDivElement` | 消息列表底部锚点，用于滚动到底部 |
+| `isInitialLoadRef` | `boolean` | 首次加载标记：首次用 `instant`，后续用 `smooth` 滚动 |
+| `filterRef` | `HTMLDivElement` | 过滤器下拉菜单容器，用于外部点击检测 |
+| `exportRef` | `HTMLDivElement` | 导出下拉菜单容器，用于外部点击检测 |
+
+### useMemo
+
+| 变量名 | 依赖 | 说明 |
+|--------|------|------|
+| `tokenStats` | `[messages]` | 计算整个会话的 Token 使用量汇总（inputTokens、outputTokens、cacheReadTokens、cacheCreationTokens） |
 
 ### 功能特性
 
-- **消息过滤**：通过下拉选择器过滤消息类型（全部 / 仅用户 / 仅助手）。过滤逻辑先排除非 `user`/`assistant` 类型的消息（如 `file-history-snapshot`、`tag` 等），再按选定的过滤条件筛选
-- **消息编辑**：点击编辑按钮后，消息内容区域变为可调整大小的 `<textarea>`，支持保存和取消
-- **消息删除**：点击删除按钮触发 `onDeleteMessage` 回调
-- **消息复制**：点击复制按钮将消息纯文本内容写入系统剪贴板
-- **自动滚动**：消息列表更新时自动平滑滚动到底部
-- **手动滚动**：工具栏提供"滚动到底部"按钮
-- **刷新功能**：工具栏提供"刷新"按钮重新读取当前会话文件
-- **Token 显示**：助手消息底部显示输入/输出 Token 使用量
-- **模型标识**：在消息头部显示使用的模型名称
+- **消息搜索**：工具栏搜索框，按消息文本模糊匹配（大小写不敏感）
+- **消息过滤**：自定义下拉菜单按角色筛选（全部/仅用户/仅助手），替代原生 `<select>`，带动画和图标
+- **消息编辑**：点击编辑按钮后消息内容区域变为可调整大小的 `<textarea>`
+- **消息删除**：单条删除
+- **消息复制**：使用 `navigator.clipboard.writeText()` API
+- **多选模式**：复选框选择、全选/取消全选、批量删除
+- **会话导出**：下拉菜单支持 Markdown 和 JSON 两种格式
+- **自动滚动**：消息列表更新时自动滚动到底部，首次加载使用瞬间跳转，后续使用平滑滚动
+- **Token 统计汇总**：工具栏显示整个会话的输入/输出/缓存 Token 总计
+- **结构化消息渲染**：通过 `MessageBlockList` 组件渲染 text、tool_use、tool_result、thinking、image 五种内容类型
+- **空状态动画**：未选择会话时显示呼吸+摇摆动画的聊天气泡图标+渐变文字
+- **侧边栏展开按钮**：侧边栏折叠时在顶部显示展开按钮
 
 ### 关键逻辑
 
-#### 消息过滤
+#### 消息过滤与搜索
 
 ```tsx
 const filteredMessages = messages.filter((msg) => {
   if (msg.type !== 'user' && msg.type !== 'assistant') return false;
-  if (filter === 'all') return true;
-  return msg.type === filter;
+  if (filter !== 'all' && msg.type !== filter) return false;
+  if (searchQuery.trim()) {
+    const text = getMessageText(msg).toLowerCase();
+    return text.includes(searchQuery.trim().toLowerCase());
+  }
+  return true;
 });
 ```
 
-第一步排除所有非对话消息（如 `file-history-snapshot`、`queue-operation`、`custom-title`、`tag`），第二步按用户选择的过滤条件筛选。
+第一步排除所有非对话消息，第二步按角色过滤，第三步按搜索关键词匹配。
 
-#### 编辑流程
+#### 搜索框焦点样式
 
-1. `handleStartEdit(msg)` — 设置 `editingId` 为消息 UUID，用 `getMessageText` 提取消息文本填入 `editContent`
-2. 用户在 `<textarea>` 中修改内容
-3. `handleSaveEdit()` — 调用 `onEditMessage(editingId, editContent)`，然后重置编辑状态
-4. `handleCancelEdit()` — 放弃修改，重置编辑状态
+使用 `focus:border-ring` 替代 `focus:ring-2 focus:ring-ring`，避免 Chromium WebView 中 `box-shadow` 失焦后残留紫色细线的渲染问题。
 
-#### 剪贴板复制
+#### 首次加载滚动优化
 
 ```tsx
-const copyToClipboard = (text: string) => {
-  navigator.clipboard.writeText(text);
+const scrollToBottom = (instant = false) => {
+  messagesEndRef.current?.scrollIntoView({ behavior: instant ? 'instant' : 'smooth' });
 };
 ```
 
-使用浏览器原生 `navigator.clipboard` API。
-
-#### 自动滚动到底部
-
-```tsx
-useEffect(() => {
-  scrollToBottom();
-}, [messages]);
-
-const scrollToBottom = () => {
-  messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-};
-```
-
-每当 `messages` 数组变化时触发平滑滚动。
+首次加载会话使用 `instant` 避免从顶部滑到底部的动画，后续更新使用 `smooth`。
 
 ### 渲染结构
 
 ```
-ChatView (flex-1, flex-col)
+ChatView (flex-1, flex-col, bg-background, min-w-0)
 ├── [session === null] → 空状态占位
-│   └── 聊天气泡图标 + "选择一个会话来查看聊天记录"
+│   ├── [sidebarCollapsed] → 展开侧边栏按钮
+│   └── 动画引导（呼吸摇摆聊天气泡 + 渐变文字）
 └── [session !== null]
-    ├── 头部工具栏 (border-b, bg-card)
-    │   ├── 左侧：会话标题 + 时间戳 + 消息计数
-    │   └── 右侧：过滤选择器 + 刷新按钮 + 滚动到底部按钮
-    └── 消息列表 (flex-1, overflow-y-auto)
+    ├── 头部工具栏 (border-b, bg-card, flex)
+    │   ├── 左侧
+    │   │   ├── [sidebarCollapsed] 展开按钮
+    │   │   └── 会话标题 + 时间戳 + 消息计数 + Token 统计
+    │   └── 右侧 (shrink-0)
+    │       ├── 搜索输入框 (Search 图标 + input + 清除按钮)
+    │       ├── 选择模式切换按钮 (CheckSquare)
+    │       ├── AnimatePresence [selectionMode]
+    │       │   ├── 全选按钮
+    │       │   ├── 取消按钮
+    │       │   └── 批量删除按钮 (显示已选数量)
+    │       ├── 过滤器下拉菜单 (Filter 图标 + AnimatePresence 弹出)
+    │       ├── 导出下拉菜单 (Download 图标 + Markdown/JSON 选项)
+    │       ├── 刷新按钮 (RefreshCw, 悬停旋转 180°)
+    │       └── 滚动到底部按钮 (ArrowDown)
+    └── 消息列表 (flex-1, overflow-y-auto, overflow-x-hidden)
         ├── [空列表] → "没有消息"
-        └── 消息条目（循环渲染，key=msg.uuid）
-            ├── 消息头部
-            │   ├── 左侧：角色标签（用户/助手）+ 时间戳 + 模型名
-            │   └── 右侧：复制 / 编辑 / 删除 按钮
+        └── 消息卡片 (motion.div, 淡入+上移动画, 循环渲染)
+            ├── 消息头部 (group)
+            │   ├── [selectionMode] 复选框 (CheckSquare/Square)
+            │   ├── 角色徽章 (User/Bot 图标 + 文字)
+            │   ├── 时间戳 + 模型名
+            │   └── [!selectionMode] 操作按钮 (group-hover 显示)
+            │       ├── 复制 (Copy)
+            │       ├── 编辑 (Edit2)
+            │       └── 删除 (Trash2)
             ├── 消息内容
             │   ├── [编辑模式] → textarea + 取消/保存按钮
-            │   └── [阅读模式] → <pre> 预格式化文本
-            └── [有 usage 数据] → Token 使用量（输入 / 输出）
+            │   └── [阅读模式] → MessageBlockList (结构化渲染)
+            └── [有 usage] → Token 使用量
 ```
 
 ---
@@ -376,7 +456,7 @@ ChatView (flex-1, flex-col)
 
 ### 组件概述
 
-SettingsPanel 是一个模态对话框组件，通过全屏半透明覆盖层显示在页面上方。它包含四个标签页（常规、环境变量、权限、关于），并支持两种工作模式：普通设置模式和环境配置编辑模式。
+SettingsPanel 是一个模态对话框组件，通过全屏半透明覆盖层+背景模糊效果显示在页面上方。它包含四个标签页（常规、环境变量、权限、关于），并支持两种工作模式。面板使用固定高度 `h-[80vh]`，内容区垂直滚动。使用 motion/react 实现面板入场/退场动画和标签页切换动画。
 
 ### Props 接口
 
@@ -394,107 +474,70 @@ interface SettingsPanelProps {
 
 | 属性 | 类型 | 说明 |
 |------|------|------|
-| `settings` | `ClaudeSettings` | 当前设置数据。普通模式下为全局 settings；配置编辑模式下 env 部分被替换为编辑中配置的 env |
-| `claudeDataPath` | `string` | Claude 数据目录路径，在"常规"标签页中只读显示 |
+| `settings` | `ClaudeSettings` | 当前设置数据。配置编辑模式下 env 部分被替换 |
+| `claudeDataPath` | `string` | Claude 数据目录路径，只读显示 |
 | `theme` | `'light' \| 'dark' \| 'system'` | 当前主题模式 |
-| `editingProfile` | `EnvProfile \| null \| undefined` | 正在编辑的环境配置对象。非 null 时面板进入配置编辑模式 |
-| `onSaveSettings` | `(settings: ClaudeSettings) => void` | 保存设置的回调。普通模式下写入 settings.json；编辑模式下更新配置的 env |
-| `onThemeChange` | `(theme: 'light' \| 'dark' \| 'system') => void` | 主题变更回调，在"常规"标签页的主题下拉选择器中触发 |
-| `onClose` | `() => void` | 关闭面板回调。同时重置 editingEnvProfile |
+| `editingProfile` | `EnvProfile \| null \| undefined` | 正在编辑的环境配置对象 |
+| `onSaveSettings` | `(settings: ClaudeSettings) => void` | 保存设置的回调 |
+| `onThemeChange` | `(theme) => void` | 主题变更回调 |
+| `onClose` | `() => void` | 关闭面板回调 |
 
 ### 内部 State
 
 | 变量名 | 类型 | 初始值 | 说明 |
 |--------|------|--------|------|
-| `editedSettings` | `ClaudeSettings` | `settings`（props） | 面板内部的设置副本，用于暂存用户的修改 |
-| `activeTab` | `'general' \| 'env' \| 'permissions' \| 'about'` | `editingProfile ? 'env' : 'general'` | 当前激活的标签页。配置编辑模式下默认打开"环境变量"标签 |
-| `hasChanges` | `boolean` | `false` | 是否有未保存的修改，控制"保存更改"按钮的启用/禁用状态 |
-| `showApiKey` | `boolean` | `false` | 是否明文显示 API Key / Token 类型的环境变量值 |
+| `editedSettings` | `ClaudeSettings` | `settings`（props） | 面板内部的设置编辑副本 |
+| `activeTab` | `'general' \| 'env' \| 'permissions' \| 'about'` | `editingProfile ? 'env' : 'general'` | 当前激活的标签页 |
+| `hasChanges` | `boolean` | `false` | 是否有未保存的修改 |
+| `showApiKey` | `boolean` | `false` | 是否明文显示敏感环境变量值 |
 
 ### 功能特性
 
-- **四个标签页**：常规 / 环境变量 / 权限 / 关于
-- **双工作模式**：
-  - 普通设置模式：编辑全局 Claude Code 设置
-  - 配置编辑模式：仅编辑选定配置的环境变量
-- **主题切换**：在常规标签页中提供三种主题模式的下拉选择
-- **模型设置**：文本输入框编辑默认模型
-- **环境变量管理**：添加、修改、删除环境变量键值对
-- **敏感信息遮罩**：自动检测变量名中包含 `token` 或 `key` 的条目，默认使用 `password` 类型输入框遮罩，可点击切换显示
+- **四个标签页**：常规 / 环境变量 / 权限 / 关于，使用 lucide-react 图标（Palette、Bot、Shield、Info）
+- **标签页滑动指示条**：活动标签下方的紫色指示条使用 `layoutId="activeTab"` 实现跨标签滑动动画
+- **标签页切换动画**：`AnimatePresence mode="wait"` 实现左滑/右滑过渡
+- **三模式主题切换**：分段控制按钮（Sun / SunMoon / Moon），`layoutId="themeSwitch"` 实现滑动指示器动画
+- **主题图标悬停旋转**：使用 variant 传播机制，悬停时图标旋转 180°（spring 动画）
+- **面板入场/退场动画**：缩放+位移+透明度动画，背景模糊效果
+- **双工作模式**：普通设置模式 / 配置编辑模式
+- **环境变量管理**：添加（`window.prompt()`）、修改、删除环境变量
+- **敏感信息遮罩**：自动检测变量名中包含 `token` 或 `key` 的条目，使用 `password` 输入框
 - **权限查看**：只读显示 `allow` 和 `deny` 权限列表
-- **应用信息**：显示版本号（v0.3.0-beta.2）、开发者信息和 GitHub 仓库链接
-- **变更检测**：只有当用户实际修改了内容后"保存更改"按钮才可用
-
-### 关键逻辑
-
-#### 环境变量增删改
-
-```tsx
-// 修改环境变量值
-const handleEnvChange = (key: string, value: string) => {
-  setEditedSettings((prev) => ({
-    ...prev,
-    env: { ...prev.env, [key]: value },
-  }));
-  setHasChanges(true);
-};
-
-// 删除环境变量
-const handleRemoveEnv = (key: string) => {
-  setEditedSettings((prev) => {
-    const newEnv = { ...prev.env };
-    delete newEnv[key];
-    return { ...prev, env: newEnv };
-  });
-  setHasChanges(true);
-};
-
-// 添加环境变量（使用 prompt 对话框获取变量名）
-const handleAddEnv = () => {
-  const key = prompt('输入环境变量名称:');
-  if (key) handleEnvChange(key, '');
-};
-```
-
-#### 敏感信息自动检测
-
-通过变量名关键字判断是否为敏感信息：
-
-```tsx
-type={key.toLowerCase().includes('token') || key.toLowerCase().includes('key')
-  ? (showApiKey ? 'text' : 'password')
-  : 'text'}
-```
-
-#### Settings 同步
-
-当 props 中的 `settings` 变化时（例如切换了环境配置），自动同步到内部编辑状态：
-
-```tsx
-useEffect(() => {
-  setEditedSettings(settings);
-}, [settings]);
-```
+- **变更检测**：只有实际修改后"保存更改"按钮才可用
 
 ### 渲染结构
 
 ```
-SettingsPanel (fixed 全屏覆盖层, z-50)
-├── 半透明黑色背景 (bg-black/50)
-└── 模态对话框 (bg-card, w-[600px], max-h-[80vh])
+SettingsPanel (motion.div, fixed 全屏覆盖层, z-50, backdrop-blur-sm)
+├── 半透明背景 (bg-black/50)
+└── 模态对话框 (motion.div, bg-card, w-[600px], h-[80vh], overflow-hidden)
     ├── 头部 (border-b)
     │   ├── 标题（"设置"或"编辑配置: {name}"）
-    │   └── 关闭按钮（X 图标）
-    ├── 标签页导航 (border-b)
-    │   └── 4 个标签按钮：常规 / 环境变量 / 权限 / 关于
-    ├── 内容区域 (flex-1, overflow-y-auto)
-    │   ├── [常规] → 主题选择 + 模型输入 + 数据路径（只读）
-    │   ├── [环境变量] → 变量列表（key-value 编辑）+ 添加变量按钮
-    │   ├── [权限] → 允许/拒绝操作列表（只读）
-    │   └── [关于] → 应用名称 + 版本 + 开发者 + GitHub 链接
+    │   └── 关闭按钮 (X 图标, motion.button)
+    ├── 标签页导航 (border-b, relative)
+    │   └── 4 个标签按钮 (motion.button + 图标)
+    │       └── [activeTab] 滑动指示条 (motion.div, layoutId="activeTab")
+    ├── 内容区域 (flex-1, overflow-y-auto, custom-scrollbar)
+    │   └── AnimatePresence mode="wait"
+    │       ├── [general] 常规设置 (motion.div, 左滑入场)
+    │       │   ├── 主题三模式分段控制 (layoutId="themeSwitch" 滑动指示器)
+    │       │   ├── 默认模型输入框
+    │       │   └── 数据路径（只读）
+    │       ├── [env] 环境变量 (motion.div)
+    │       │   ├── 说明 + 添加按钮 (Plus)
+    │       │   └── 变量列表
+    │       │       └── 单项：标签 + 输入框 + [敏感] Eye/EyeOff + 删除 Trash2
+    │       ├── [permissions] 权限（只读）(motion.div)
+    │       │   ├── 允许列表
+    │       │   └── 拒绝列表
+    │       └── [about] 关于 (motion.div)
+    │           ├── 版本 (v0.3.0-beta.2)
+    │           ├── 开发者
+    │           ├── GitHub 链接 (Github 图标)
+    │           └── 简介
     └── 底部操作栏 (border-t)
-        ├── 取消按钮
-        └── 保存更改按钮（有变更时启用，无变更时禁用灰显）
+        ├── 取消按钮 (motion.button)
+        └── 保存更改按钮 (motion.button, hasChanges 控制可用状态)
 ```
 
 ---
@@ -505,7 +548,7 @@ SettingsPanel (fixed 全屏覆盖层, z-50)
 
 ### 组件概述
 
-EnvSwitcher 是一个嵌入在 Sidebar 头部的下拉菜单组件，用于在多个环境配置之间快速切换。它显示当前激活的配置名称，点击展开下拉列表，支持选择、保存、编辑和删除配置。
+EnvSwitcher 是一个嵌入在 Sidebar 头部的下拉菜单组件，用于在多个环境配置之间快速切换。使用 motion/react 实现下拉菜单的进入/退出动画。下拉菜单宽度 `w-full` 与触发按钮保持一致。
 
 ### Props 接口
 
@@ -521,92 +564,148 @@ interface EnvSwitcherProps {
 
 | 属性 | 类型 | 说明 |
 |------|------|------|
-| `config` | `EnvSwitcherConfig` | 完整的环境配置数据，包含 `profiles` 数组和 `activeProfileId` |
-| `onSwitchProfile` | `(profile: EnvProfile) => void` | 点击配置条目切换环境的回调 |
-| `onSaveCurrentAsProfile` | `(name: string) => void` | 保存当前环境为新配置的回调，参数为用户输入的配置名 |
+| `config` | `EnvSwitcherConfig` | 完整的环境配置数据 |
+| `onSwitchProfile` | `(profile: EnvProfile) => void` | 切换环境的回调 |
+| `onSaveCurrentAsProfile` | `(name: string) => void` | 保存当前环境为新配置的回调 |
 | `onDeleteProfile` | `(profileId: string) => void` | 删除配置的回调 |
-| `onEditProfile` | `(profile: EnvProfile) => void` | 编辑配置的回调，触发后会打开 SettingsPanel 的配置编辑模式 |
+| `onEditProfile` | `(profile: EnvProfile) => void` | 编辑配置的回调 |
 
 ### 内部 State
 
 | 变量名 | 类型 | 初始值 | 说明 |
 |--------|------|--------|------|
-| `showDropdown` | `boolean` | `false` | 控制下拉菜单的显示/隐藏 |
-| `showSaveDialog` | `boolean` | `false` | 控制"保存当前配置"内联表单的显示/隐藏 |
+| `showDropdown` | `boolean` | `false` | 下拉菜单的显示/隐藏 |
+| `showSaveDialog` | `boolean` | `false` | "保存当前配置"内联表单的显示/隐藏 |
 | `newProfileName` | `string` | `''` | 新配置名称输入框的当前值 |
 
 ### Ref
 
 | Ref 名 | 类型 | 说明 |
 |--------|------|------|
-| `dropdownRef` | `HTMLDivElement` | 下拉菜单容器引用，用于"点击外部关闭"功能 |
+| `dropdownRef` | `HTMLDivElement` | 下拉菜单容器引用，用于外部点击检测 |
 
 ### 功能特性
 
-- **当前配置显示**：按钮始终显示当前激活的配置名称，无激活配置时显示"默认配置"
-- **下拉菜单**：点击按钮展开/收起配置列表
-- **点击外部关闭**：通过 `useEffect` 监听全局 `mousedown` 事件，点击组件外部时自动关闭下拉菜单
-- **配置选择**：点击配置条目立即切换并关闭下拉菜单
-- **激活标识**：当前激活的配置左侧显示对勾图标
+- **当前配置显示**：按钮显示当前激活配置名称，无激活时显示"默认配置"
+- **下拉箭头旋转**：随展开/收起状态平滑旋转 180°（motion.div animate）
+- **下拉菜单动画**：AnimatePresence + motion.div 实现 opacity/y/scale 入场/退场
+- **点击外部关闭**：`useEffect` 全局 `mousedown` 监听
+- **配置选择**：点击条目立即切换并关闭下拉菜单
+- **激活标识**：当前激活配置显示 Check 对勾图标
 - **变量计数**：每个配置下方显示"N 个变量"
-- **编辑/删除操作**：鼠标悬停在配置条目时，右侧显示编辑和删除图标按钮（`opacity-0 → group-hover:opacity-100` 过渡效果）
-- **删除确认**：删除操作前弹出 `confirm()` 确认对话框
-- **保存当前配置**：下拉菜单底部提供"保存当前配置"按钮，点击后展开内联输入框
-- **快捷键支持**：保存输入框中按 `Enter` 确认保存，按 `Escape` 取消
-
-### 关键逻辑
-
-#### 点击外部关闭
-
-```tsx
-useEffect(() => {
-  const handleClickOutside = (event: MouseEvent) => {
-    if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-      setShowDropdown(false);
-    }
-  };
-  document.addEventListener('mousedown', handleClickOutside);
-  return () => document.removeEventListener('mousedown', handleClickOutside);
-}, []);
-```
-
-使用 `mousedown` 而非 `click` 事件，确保在冒泡到其他点击处理器之前关闭菜单。
-
-#### 事件冒泡阻止
-
-编辑和删除按钮使用 `e.stopPropagation()` 防止触发父级配置条目的点击（切换配置）事件：
-
-```tsx
-<button onClick={(e) => {
-  e.stopPropagation();
-  onEditProfile(profile);
-  setShowDropdown(false);
-}}>
-```
-
-#### 保存配置流程
-
-1. 点击"保存当前配置" → `setShowSaveDialog(true)`
-2. 输入框自动聚焦（`autoFocus`）
-3. 输入配置名称 → 按 Enter 或点击确认按钮
-4. `handleSaveProfile()` — 校验非空 → 调用 `onSaveCurrentAsProfile` → 重置状态
+- **编辑/删除操作**：悬停显示操作按钮（Edit2 / Trash2），使用 `e.stopPropagation()` 防止冒泡
+- **删除确认**：使用 `confirm()` 原生对话框
+- **保存当前配置**：内联输入框，支持 `Enter` 确认、`Escape` 取消
 
 ### 渲染结构
 
 ```
 EnvSwitcher (relative 定位容器)
-├── 触发器按钮（当前配置名 + 展开/收起箭头）
-└── [showDropdown] 下拉菜单 (absolute, z-50, shadow-xl)
-    ├── 标题区 ("环境配置")
+├── 触发器按钮 (motion.button, w-full)
+│   ├── Terminal 图标
+│   ├── 配置名称 (truncate)
+│   └── ChevronDown (motion.div 旋转)
+└── AnimatePresence > [showDropdown] 下拉菜单 (motion.div, absolute, w-full, z-50)
+    ├── 标题 ("环境配置")
     ├── 配置列表 (max-h-60, overflow-y-auto)
     │   ├── [空列表] → "暂无保存的配置"
     │   └── 配置条目（循环渲染）
-    │       ├── 左侧：[激活时] 对勾图标 + 配置名 + 变量计数
-    │       └── 右侧：[悬停显示] 编辑按钮 + 删除按钮
+    │       ├── 左侧：[激活时] Check + 配置名 + 变量计数
+    │       └── 右侧：[group-hover] Edit2 + Trash2
     └── 底部操作区 (border-t)
-        ├── [showSaveDialog === false] → "保存当前配置"按钮
-        └── [showSaveDialog === true] → 输入框 + 确认按钮 + 取消按钮
+        ├── [!showSaveDialog] "保存当前配置"按钮 (Plus)
+        └── [showSaveDialog] 输入框 + Plus 确认 + X 取消
 ```
+
+---
+
+## 6. MessageBlockList — 消息内容块列表
+
+**文件路径：** `src/components/MessageBlockList.tsx`
+
+### 组件概述
+
+MessageBlockList 是消息内容渲染的入口组件，负责将 `SessionMessage` 的 `content` 字段转换为可视化的内容块列表。根据 content 的数据格式（字符串 vs 数组）选择不同的渲染策略，替代原有的 `getMessageText()` + `<pre>` 方案。
+
+### Props 接口
+
+```tsx
+interface MessageBlockListProps {
+  message: SessionMessage;
+}
+```
+
+| 属性 | 类型 | 说明 |
+|------|------|------|
+| `message` | `SessionMessage` | 要渲染内容的会话消息对象 |
+
+### 渲染逻辑
+
+| 情况 | 渲染方式 |
+|------|---------|
+| `message.message` 不存在 | `[无消息内容]` 提示 |
+| `content` 为 `string` | `<pre>` 预格式化文本（`whitespace-pre-wrap break-words`） |
+| `content` 为 `MessageContent[]` | 遍历数组，每个元素渲染一个 `MessageContentRenderer` |
+| 未知格式 | `[未知内容格式]` 提示 |
+
+### 渲染结构
+
+```
+MessageBlockList
+├── [无 message] → "[无消息内容]" (italic, muted)
+├── [string content] → <pre> 预格式化文本
+├── [array content] → <div className="space-y-3">
+│   └── MessageContentRenderer × N (key=index)
+└── [其他] → "[未知内容格式]" (italic, muted)
+```
+
+---
+
+## 7. MessageContentRenderer — 消息内容块渲染器
+
+**文件路径：** `src/components/MessageContentRenderer.tsx`
+
+### 组件概述
+
+MessageContentRenderer 负责根据 `MessageContent` 的 `type` 字段分类渲染不同类型的内容块。每种类型使用独立的视觉样式（颜色、边框、图标）便于区分。使用 motion/react 为各内容块添加进入动画，使用 lucide-react 图标（Wrench、CheckCircle2、XCircle、Lightbulb）替代 emoji。
+
+### Props 接口
+
+```tsx
+interface MessageContentRendererProps {
+  block: MessageContent;
+}
+```
+
+| 属性 | 类型 | 说明 |
+|------|------|------|
+| `block` | `MessageContent` | 要渲染的单个消息内容块 |
+
+### 渲染逻辑（按 type 分类）
+
+| type | 视觉样式 | 动画 | 说明 |
+|------|---------|------|------|
+| `text` | `<pre>` 预格式化文本，font-sans | 淡入 + 上移 | 保留空白符并自动换行 |
+| `tool_use` | 蓝色左边框可折叠面板（`<details>`），`tool-use-block` CSS 类 | 缩放淡入 | 显示 Wrench 图标 + 工具名称 + JSON 参数 |
+| `tool_result` | 绿色左边框（错误时红色），`tool-result-block` CSS 类 | 左滑淡入 | CheckCircle2/XCircle 图标，支持嵌套内容递归渲染 |
+| `thinking` | 紫色虚线左边框可折叠面板，`thinking-block` CSS 类 | 缩放淡入 | Lightbulb 图标，默认折叠，斜体淡色显示 |
+| `image` | 圆角阴影内联图片 | 缩放淡入 | Base64 data URI，`loading="lazy"` |
+| 未知类型 | `<pre>` 提示文字 | 无 | 显示 `[type] 不支持的内容类型` |
+
+### 递归渲染
+
+`tool_result` 类型的 `content` 字段可以是嵌套的 `MessageContent[]` 数组，此时会递归调用 `MessageContentRenderer` 渲染每个嵌套块。
+
+### CSS 类说明
+
+以下 CSS 类定义在 `src/index.css` 中，每个类均设置了 `overflow: hidden` 防止内容撑开容器：
+
+- `.tool-use-block`：蓝色左边框，浅蓝色背景
+- `.tool-result-block`：绿色左边框，浅绿色背景
+- `.tool-result-error`：红色左边框，浅红色背景
+- `.thinking-block`：紫色虚线左边框
+- `.content-block`：通用内容块基础样式（padding、圆角）
+- `.code-block`：代码展示块样式
 
 ---
 
@@ -617,7 +716,20 @@ App (根组件)
 ├── Sidebar
 │   └── EnvSwitcher
 ├── ChatView
+│   └── MessageBlockList
+│       └── MessageContentRenderer (可递归)
 └── SettingsPanel (条件渲染)
 ```
 
-所有组件均为无状态（受控）或仅包含 UI 相关的本地状态（如搜索词、展开状态、编辑模式）。业务数据和持久化逻辑完全由 App 组件通过 Props 和回调函数控制。
+### 数据流向
+
+```
+App (16 个状态变量, 18 个 useCallback)
+├── Sidebar         ← projects, currentProject, currentSession, envConfig,
+│                     width, isResizing + 9 个回调
+├── ChatView        ← session, messages, selectionMode, selectedMessages,
+│                     sidebarCollapsed + 10 个回调
+└── SettingsPanel   ← settings, claudeDataPath, theme, editingProfile + 3 个回调
+```
+
+所有组件均为函数组件，业务数据和持久化逻辑完全由 App 组件通过 Props 和回调函数控制。子组件仅包含 UI 相关的本地状态（如搜索词、展开状态、编辑模式、下拉菜单可见性等）。

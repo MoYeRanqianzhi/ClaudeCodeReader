@@ -1,6 +1,6 @@
 # 已知问题与限制
 
-本文档记录 ClaudeCodeReader (CCR) 当前版本（0.3.0-beta.2）中已知的功能限制、设计注意事项、平台差异和 UI/UX 局限性。
+本文档记录 ClaudeCodeReader (CCR) 当前版本中已知的功能限制、设计注意事项、平台差异和 UI/UX 局限性。
 
 ---
 
@@ -16,7 +16,7 @@
 
 在获取项目会话列表时，`getProjectSessions()` 函数会跳过所有以 `agent-` 开头的 `.jsonl` 文件。这些文件通常是 Claude Code 的 Agent 子任务会话记录，当前不在 CCR 的显示范围内。
 
-**相关代码：** `src/utils/claudeData.ts` 第 190 行：
+**相关代码：** `src/utils/claudeData.ts`：
 ```typescript
 if (entry.isFile && entry.name?.endsWith('.jsonl') && !entry.name.startsWith('agent-'))
 ```
@@ -27,30 +27,67 @@ if (entry.isFile && entry.name?.endsWith('.jsonl') && !entry.name.startsWith('ag
 
 ### AppState 接口未被使用
 
-`src/types/claude.ts` 中定义了 `AppState` 接口，描述了应用的完整状态结构（settings、projects、currentProject、currentSession、messages、theme、claudeDataPath）。但实际的状态管理在 `App.tsx` 中通过多个独立的 `useState` Hook 实现，未使用该统一接口。
+`src/types/claude.ts` 中定义了 `AppState` 接口，描述了应用的完整状态结构。但实际的状态管理在 `App.tsx` 中通过多个独立的 `useState` Hook 实现，未使用该统一接口。
 
-**可能的意图：** 该接口可能是为未来引入集中式状态管理（如 Context、Zustand 等）预留的类型定义。
+---
 
-### 消息内容不支持 Markdown 渲染
+## 已修复的历史问题
 
-聊天视图中的消息内容使用 `<pre>` 标签包裹并以纯文本方式显示，不支持 Markdown 语法渲染。Claude 助手的回复中通常包含 Markdown 格式（标题、代码块、列表等），但在 CCR 中只会以原始文本形式展示。
+以下问题已在 UI 重构中修复，记录于此供参考：
 
-**相关代码：** `src/components/ChatView.tsx` 第 306 行：
-```tsx
-<pre className="whitespace-pre-wrap break-words text-sm font-sans">
-  {getMessageText(msg)}
-</pre>
-```
+### [已修复] 侧边栏被长内容撑开
+
+- **原症状**：打开包含长行工具结果的会话时，侧边栏宽度被撑开超过设定值
+- **根因**：flex 子项默认 `min-width: auto`，ChatView 的固有最小宽度超过剩余空间
+- **修复**：ChatView 根 div 添加 `min-w-0`；Sidebar 设置 `flexShrink: 0, minWidth: 0`
+
+### [已修复] EnvSwitcher 下拉菜单被遮挡
+
+- **原症状**：展开环境配置下拉菜单后，菜单被下方的项目列表条目遮挡
+- **根因**：侧边栏头部 `overflow-hidden` 裁剪了 `absolute` 定位的下拉菜单
+- **修复**：头部改为 `relative z-10`
+
+### [已修复] 搜索框焦点环残影
+
+- **原症状**：ChatView 搜索框聚焦后失焦，底部残留一条紫色细线
+- **根因**：`focus:ring-2` 的 `box-shadow` 在 Chromium WebView 中失焦后未及时重绘
+- **修复**：改用 `focus:border-ring`（基于 border-color）
+
+### [已修复] 消息内容不支持结构化渲染
+
+- **原症状**：工具调用、思考过程等内容块以纯文本形式显示
+- **修复**：新增 MessageBlockList / MessageContentRenderer 组件，支持 text、tool_use、tool_result、thinking、image 五种内容类型的结构化渲染
 
 ---
 
 ## 设计注意事项
 
+### Flex 布局 `min-width: auto` 陷阱
+
+**关键知识**：在 flex 行布局中，子项默认 `min-width: auto`，意味着其最小宽度等于内容的固有最小宽度（intrinsic min-content width）。当子项内容包含长行不可换行文本时，flex 算法无法将该子项压缩到比内容更窄，导致布局被撑开。
+
+**项目中的应对**：
+- Sidebar：`style={{ flexShrink: 0, minWidth: 0, overflow: 'hidden' }}`
+- ChatView 根 div：`className="flex-1 flex flex-col bg-background min-w-0"`
+- 内容块 CSS：`.tool-use-block`、`.tool-result-block`、`.thinking-block` 均设置 `overflow: hidden`
+
+### 侧边栏拖动调整宽度的闭包问题
+
+拖动事件使用全局 `document.addEventListener('mousemove', ...)` 监听。由于事件监听器在 `useEffect` 中注册且依赖数组为空，回调闭包中的 state 永远是初始值。
+
+**解决方案**：使用 `useRef`（`isResizingRef`）追踪拖动状态，`setSidebarWidth` 使用函数式更新避免读取陈旧 state。
+
+### motion variant 传播机制
+
+主题切换和设置图标的悬停旋转动画使用 motion/react 的 variant 传播：
+- 父元素设置 `whileHover="hover"` 传播 variant 名称
+- 子 `motion.div` 设置 `variants={{ hover: { rotate: 180 } }}` 接收状态
+
+这确保鼠标悬停在按钮任意位置（包括文字区域）时都能触发图标旋转，而非仅悬停在图标上。
+
 ### readEnvSwitcherConfig 的 _claudePath 参数
 
 `readEnvSwitcherConfig()` 和 `saveEnvSwitcherConfig()` 函数签名中接收 `_claudePath` 参数（以下划线前缀标记为未使用），但实际并不使用该参数。环境配置文件的存储路径已硬编码为 `~/.mo/CCR/env-profiles.json`。
-
-**保留原因：** 该参数是为向前兼容保留的。未来可能需要支持多 Claude 实例或自定义数据路径场景，届时可直接利用此参数而无需变更函数签名。
 
 ### 环境变量敏感字段检测
 
@@ -66,37 +103,15 @@ key.toLowerCase().includes('token') || key.toLowerCase().includes('key')
 
 ### decodeProjectPath 路径编码依赖
 
-`decodeProjectPath()` 函数负责将 Claude Code 的编码项目路径名还原为实际文件系统路径。该函数依赖 Claude Code 使用的特定路径编码规则：
-
-```typescript
-// "G--ClaudeProjects-Test" → "G:\ClaudeProjects\Test"
-return encodedName
-  .replace(/^([A-Za-z])--/, '$1:\\')
-  .replace(/--/g, '\\')
-  .replace(/-/g, '\\');
-```
-
-**风险：** 如果 Claude Code 在未来版本中变更路径编码格式，CCR 将无法正确解码项目路径，导致项目列表显示异常。
+`decodeProjectPath()` 函数依赖 Claude Code 使用的特定路径编码规则。如果 Claude Code 在未来版本中变更路径编码格式，CCR 将无法正确解码项目路径。
 
 ### 无自定义 Tauri Command
 
-当前 Rust 层（`src-tauri/src/lib.rs`）未注册任何自定义 Tauri Command（`#[tauri::command]`）。所有文件系统操作（读取设置、读写会话消息、管理环境配置等）均通过前端直接调用 `@tauri-apps/plugin-fs` 插件完成。
-
-**影响：**
-- 前端直接操作文件系统，无 Rust 层的数据校验或业务逻辑封装
-- 如需添加复杂的原生功能（如文件监听、系统通知等），需要新增 Tauri Command
+当前 Rust 层未注册任何自定义 Tauri Command。所有文件系统操作均通过前端直接调用 `@tauri-apps/plugin-fs` 插件完成。
 
 ### CSP 安全策略已禁用
 
-`tauri.conf.json` 中 Content Security Policy 设置为 `null`：
-
-```json
-"security": {
-  "csp": null
-}
-```
-
-这意味着前端页面没有 CSP 限制，可以加载任意来源的资源。对于本地桌面应用，风险较低，但不符合安全最佳实践。
+`tauri.conf.json` 中 Content Security Policy 设置为 `null`，前端页面没有 CSP 限制。
 
 ---
 
@@ -106,22 +121,15 @@ return encodedName
 
 - Windows 文件路径使用反斜杠（`\`）作为分隔符
 - `decodeProjectPath()` 的编码/解码逻辑专门针对 Windows 风格路径设计
-- 包含盘符的路径编码格式为 `{盘符}--{路径段}`（如 `G--ClaudeProjects`）
 - macOS/Linux 路径使用正斜杠（`/`），编码行为可能不同
 
 ### macOS 安装需要解压
 
-macOS 版本的二进制文件以 `.app.tar.gz` 格式分发。`postinstall.js` 在 macOS 上执行额外步骤：
-
-1. 下载 `.app.tar.gz` 压缩包
-2. 调用系统 `tar` 命令解压为 `ClaudeCodeReader.app` 目录
-3. 删除压缩包原文件
-
-已安装检测也因此不同：检查 `ClaudeCodeReader.app` 目录是否存在，而非检查压缩包。
+macOS 版本以 `.app.tar.gz` 格式分发，`postinstall.js` 在 macOS 上调用系统 `tar` 命令解压。
 
 ### Linux AppImage 权限
 
-Linux 版本使用 AppImage 格式分发。下载后需要通过 `chmod` 设置可执行权限（`0o755`），否则无法直接运行。`postinstall.js` 会自动完成此步骤。
+Linux 版本使用 AppImage 格式分发，下载后需要 `chmod` 设置可执行权限（`0o755`）。`postinstall.js` 会自动完成此步骤。
 
 ---
 
@@ -129,42 +137,23 @@ Linux 版本使用 AppImage 格式分发。下载后需要通过 `chmod` 设置�
 
 ### 使用浏览器原生对话框
 
-以下交互操作使用浏览器原生 API 而非自定义 UI 组件：
-
 | 操作 | 使用的 API | 局限 |
 |------|-----------|------|
-| 添加环境变量 | `window.prompt()` | 无法自定义样式、无校验反馈、无法取消后重试 |
-| 删除消息确认 | `window.confirm()` | 无法自定义按钮文案和样式，与应用主题不一致 |
+| 添加环境变量 | `window.prompt()` | 无法自定义样式、无校验反馈 |
+| 删除环境配置确认 | `window.confirm()` | 无法自定义按钮文案和样式 |
 
 ### 无撤销/重做功能
 
-消息编辑和删除操作是不可逆的。一旦保存编辑或确认删除，没有撤销（Undo）或重做（Redo）机制来恢复之前的状态。操作直接写入 `.jsonl` 文件。
+消息编辑和删除操作是不可逆的。操作直接写入 `.jsonl` 文件。
 
 ### 无分页加载
 
-会话消息一次性全量加载到内存中。对于包含大量消息的会话（数千条），可能导致：
-
-- 初始加载时间较长
-- 内存占用较高
-- 滚动渲染性能下降
-
-**相关代码：** `readSessionMessages()` 读取整个 `.jsonl` 文件并解析所有行，`ChatView` 组件渲染全部 `filteredMessages`。
-
-### 窗口布局
-
-应用窗口有以下尺寸约束（定义在 `tauri.conf.json`）：
-
-| 属性 | 值 |
-|------|-----|
-| 默认宽度 | 1200px |
-| 默认高度 | 800px |
-| 最小宽度 | 800px |
-| 最小高度 | 600px |
-| 可调整大小 | 是 |
-| 居中显示 | 是 |
-
-布局采用左右分栏结构（Sidebar + ChatView），在接近最小宽度时内容区域可能显示较为拥挤，不完全适配小屏幕场景。
+会话消息一次性全量加载到内存中。对于包含大量消息的会话，可能影响性能。
 
 ### 主题持久化未实现
 
-当前主题选择（浅色/深色/跟随系统）仅保存在 React 状态中（`App.tsx` 的 `useState`），不会持久化到本地存储。应用重启后，主题会重置为默认的「跟随系统」模式。
+主题选择仅保存在 React 状态中，不会持久化到本地存储。应用重启后重置为「跟随系统」模式。
+
+### 窗口布局
+
+应用窗口最小宽度 800px / 最小高度 600px。在接近最小宽度时，工具栏按钮可能溢出可视区域（右侧按钮组设置了 `shrink-0` 防止变形，但可能被裁剪）。

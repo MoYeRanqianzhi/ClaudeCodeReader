@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Palette, Bot, Shield, Info, Eye, EyeOff, Plus, Trash2, Github } from 'lucide-react';
+import { X, Palette, Bot, Shield, Info, Eye, EyeOff, Plus, Trash2, Github, Sun, SunMoon, Moon } from 'lucide-react';
 import type { ClaudeSettings, EnvProfile } from '../types/claude';
 
 /**
@@ -47,6 +47,16 @@ export function SettingsPanel({
   const [hasChanges, setHasChanges] = useState(false);
   /** 控制 API 密钥等敏感环境变量值的可见性 */
   const [showApiKey, setShowApiKey] = useState(false);
+
+  /**
+   * 主题三模式选项配置
+   * 每项包含值、显示标签和对应的 lucide 图标
+   */
+  const themeOptions = [
+    { value: 'light' as const, label: '浅色', icon: Sun },
+    { value: 'system' as const, label: '自动', icon: SunMoon },
+    { value: 'dark' as const, label: '深色', icon: Moon },
+  ];
 
   /** 当外部 settings 变化时，同步更新编辑副本 */
   useEffect(() => {
@@ -127,7 +137,7 @@ export function SettingsPanel({
     >
       {/* 面板主体：阻止点击冒泡以防误关闭，带有缩放和位移入场动画 */}
       <motion.div
-        className="bg-card rounded-xl shadow-xl w-[600px] max-h-[80vh] flex flex-col border border-border"
+        className="bg-card rounded-xl shadow-xl w-[600px] h-[80vh] flex flex-col border border-border overflow-hidden"
         initial={{ scale: 0.95, y: 20, opacity: 0 }}
         animate={{ scale: 1, y: 0, opacity: 1 }}
         exit={{ scale: 0.95, y: 20, opacity: 0 }}
@@ -180,7 +190,7 @@ export function SettingsPanel({
         </div>
 
         {/* 内容区域：根据活动标签显示对应的设置内容，使用 AnimatePresence 实现切换动画 */}
-        <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
+        <div className="flex-1 overflow-x-hidden overflow-y-auto p-4 custom-scrollbar">
           <AnimatePresence mode="wait">
             {/* 常规设置标签页：主题选择、模型配置、数据路径 */}
             {activeTab === 'general' && (
@@ -191,18 +201,53 @@ export function SettingsPanel({
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0, x: 20 }}
               >
-                {/* 主题设置：下拉选择跟随系统/浅色/深色 */}
+                {/* 主题设置：三模式分段切换按钮（浅色 / 自动 / 深色） */}
                 <div>
-                  <label className="block text-sm font-medium text-foreground mb-2">主题</label>
-                  <select
-                    value={theme}
-                    onChange={(e) => onThemeChange(e.target.value as 'light' | 'dark' | 'system')}
-                    className="w-full px-3 py-2 rounded-lg bg-muted text-foreground border border-border focus:outline-none focus:ring-2 focus:ring-ring"
-                  >
-                    <option value="system">跟随系统</option>
-                    <option value="light">浅色</option>
-                    <option value="dark">深色</option>
-                  </select>
+                  <label className="block text-sm font-medium text-foreground mb-3">主题</label>
+                  <div className="inline-flex items-center gap-1 p-1 bg-muted rounded-xl border border-border">
+                    {themeOptions.map((option) => {
+                      const Icon = option.icon;
+                      const isActive = theme === option.value;
+                      return (
+                        <motion.button
+                          key={option.value}
+                          onClick={() => onThemeChange(option.value)}
+                          className="relative flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium cursor-pointer"
+                          whileHover="hover"
+                          whileTap={{ scale: 0.95 }}
+                        >
+                          {/* 活动指示器：使用 layoutId 实现跨按钮的滑动动画 */}
+                          {isActive && (
+                            <motion.div
+                              className="absolute inset-0 bg-card rounded-lg shadow-sm border border-border"
+                              layoutId="themeSwitch"
+                              transition={{ type: "spring", stiffness: 400, damping: 30 }}
+                            />
+                          )}
+                          {/* 图标容器：悬停时通过 variants 接收父级 "hover" 状态触发旋转动画 */}
+                          <motion.div
+                            className="relative z-10"
+                            variants={{ hover: { rotate: 180 } }}
+                            transition={{ type: "spring", stiffness: 300, damping: 15 }}
+                          >
+                            <Icon
+                              className={`w-4 h-4 transition-colors ${
+                                isActive ? 'text-primary' : 'text-muted-foreground'
+                              }`}
+                              strokeWidth={2}
+                            />
+                          </motion.div>
+                          <span
+                            className={`relative z-10 transition-colors ${
+                              isActive ? 'text-foreground' : 'text-muted-foreground'
+                            }`}
+                          >
+                            {option.label}
+                          </span>
+                        </motion.button>
+                      );
+                    })}
+                  </div>
                 </div>
 
                 {/* 模型设置：文本输入框设置默认使用的 Claude 模型 */}

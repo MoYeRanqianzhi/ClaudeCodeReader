@@ -14,7 +14,7 @@
  *  └── SettingsPanel    - 设置面板（浮层，条件渲染）
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { AnimatePresence } from 'motion/react';
 import { Sidebar, ChatView, SettingsPanel } from './components';
 import type { Project, Session, SessionMessage, ClaudeSettings, EnvSwitcherConfig, EnvProfile } from './types/claude';
@@ -35,6 +35,13 @@ import {
   applyEnvProfile,
   saveCurrentAsProfile,
 } from './utils/claudeData';
+
+/** 侧边栏自动折叠阈值（像素）：拖动宽度低于此值后松开鼠标，侧边栏自动折叠 */
+const SIDEBAR_COLLAPSE_THRESHOLD = 160;
+/** 侧边栏最小宽度（像素）：宽度回弹下限，避免内容被过度压缩 */
+const SIDEBAR_MIN_WIDTH = 220;
+/** 侧边栏默认宽度（像素）：初始宽度，折叠后重新展开时恢复到此值 */
+const SIDEBAR_DEFAULT_WIDTH = 320;
 
 /**
  * 应用根组件
@@ -75,6 +82,64 @@ function App() {
   const [selectionMode, setSelectionMode] = useState(false);
   /** 侧边栏折叠状态：为 true 时隐藏侧边栏，释放主内容区空间 */
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  /** 侧边栏宽度（像素），可通过拖动右侧边缘调整 */
+  const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH);
+  /** 是否正在拖动调整侧边栏宽度，为 true 时禁用过渡动画确保拖动流畅 */
+  const [isResizingSidebar, setIsResizingSidebar] = useState(false);
+  /** 使用 ref 追踪拖动状态，避免全局事件监听器中的闭包陈旧问题 */
+  const isResizingRef = useRef(false);
+
+  /**
+   * 开始拖动调整侧边栏宽度。
+   * 设置拖动标志并修改全局光标样式，同时禁用文字选择防止拖动干扰。
+   */
+  const handleSidebarResizeStart = useCallback(() => {
+    isResizingRef.current = true;
+    setIsResizingSidebar(true);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  }, []);
+
+  /**
+   * 侧边栏拖动调整副作用
+   *
+   * 在全局 document 上监听 mousemove 和 mouseup 事件，实现拖动调整侧边栏宽度。
+   * 使用 ref 而非 state 来判断是否处于拖动状态，避免在事件监听器闭包中读到陈旧值。
+   * - mousemove：实时更新侧边栏宽度（下限 80px，防止负值）
+   * - mouseup：结束拖动。如果最终宽度低于折叠阈值则自动折叠侧边栏并重置宽度，
+   *           否则如果低于最小宽度则回弹到最小宽度
+   */
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isResizingRef.current) return;
+      setSidebarWidth(Math.max(80, e.clientX));
+    };
+
+    const handleMouseUp = (e: MouseEvent) => {
+      if (!isResizingRef.current) return;
+      isResizingRef.current = false;
+      setIsResizingSidebar(false);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+
+      const finalWidth = Math.max(80, e.clientX);
+      if (finalWidth < SIDEBAR_COLLAPSE_THRESHOLD) {
+        // 宽度低于折叠阈值 → 自动折叠，并重置宽度为默认值供下次展开
+        setSidebarCollapsed(true);
+        setSidebarWidth(SIDEBAR_DEFAULT_WIDTH);
+      } else if (finalWidth < SIDEBAR_MIN_WIDTH) {
+        // 宽度低于最小值但未触发折叠 → 回弹到最小宽度
+        setSidebarWidth(SIDEBAR_MIN_WIDTH);
+      }
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, []);
 
   /**
    * 主题切换副作用
@@ -531,7 +596,7 @@ function App() {
     return (
       <div className="h-screen flex items-center justify-center bg-background">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
+          <div className="animate-spin h-12 w-12 gradient-spinner mx-auto mb-4"></div>
           <p className="text-muted-foreground">正在加载 Claude Code 数据...</p>
         </div>
       </div>
@@ -571,7 +636,7 @@ function App() {
 
   // ============ 正常渲染：主应用界面 ============
   return (
-    <div className="h-screen w-screen overflow-hidden flex">
+    <div className="h-screen w-screen overflow-hidden flex relative">
       {/* 左侧边栏：项目导航、会话列表、环境配置切换（折叠时隐藏）
           使用 AnimatePresence 包裹条件渲染，使侧边栏在显示/隐藏时可以执行进出场动画。
           AnimatePresence 会在子组件从 DOM 移除前等待其退出动画完成。 */}
@@ -582,6 +647,8 @@ function App() {
             currentProject={currentProject}
             currentSession={currentSession}
             envConfig={envConfig}
+            width={sidebarWidth}
+            isResizing={isResizingSidebar}
             onSelectProject={setCurrentProject}
             onSelectSession={handleSelectSession}
             onDeleteSession={handleDeleteSession}
@@ -594,6 +661,15 @@ function App() {
           />
         )}
       </AnimatePresence>
+
+      {/* 侧边栏拖动调整宽度的手柄：绝对定位覆盖在侧边栏右边缘上方，不占布局空间，避免视觉空隙 */}
+      {!sidebarCollapsed && (
+        <div
+          onMouseDown={handleSidebarResizeStart}
+          className="absolute top-0 bottom-0 w-1 cursor-col-resize hover:bg-primary/30 active:bg-primary/50 transition-colors z-20"
+          style={{ left: sidebarWidth - 1 }}
+        />
+      )}
 
       {/* 主内容区：聊天消息展示和操作 */}
       <ChatView

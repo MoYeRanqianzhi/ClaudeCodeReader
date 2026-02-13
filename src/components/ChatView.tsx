@@ -245,7 +245,7 @@ export function ChatView({
   /* 空状态：未选择任何会话时显示引导界面 */
   if (!session) {
     return (
-      <div className="flex-1 flex flex-col bg-background">
+      <div className="flex-1 flex flex-col bg-background min-w-0">
         {/* 侧边栏折叠时在顶部显示展开按钮，否则用户无法恢复侧边栏 */}
         {sidebarCollapsed && (
           <div className="p-2 border-b border-border bg-card">
@@ -260,27 +260,46 @@ export function ChatView({
             </motion.button>
           </div>
         )}
-        {/* 空状态引导：居中显示图标和提示文字 */}
+        {/* 空状态引导：居中显示动画图标和渐变提示文字 */}
         <div className="flex-1 flex items-center justify-center">
-          <div className="text-center text-muted-foreground">
-            <MessageSquare className="w-16 h-16 mx-auto mb-4 opacity-50" strokeWidth={1.5} />
-            <p className="text-lg">选择一个会话来查看聊天记录</p>
-          </div>
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="text-center text-muted-foreground"
+          >
+            {/* 呼吸 + 轻微摇摆动画的聊天气泡图标 */}
+            <motion.svg
+              animate={{ scale: [1, 1.1, 1], rotate: [0, 5, -5, 0] }}
+              transition={{ duration: 3, repeat: Infinity, ease: 'easeInOut' }}
+              className="w-16 h-16 mx-auto mb-4 opacity-50"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={1.5}
+                d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
+              />
+            </motion.svg>
+            <p className="text-lg gradient-text">选择一个会话来查看聊天记录</p>
+          </motion.div>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="flex-1 flex flex-col bg-background">
+    <div className="flex-1 flex flex-col bg-background min-w-0">
       {/* 头部工具栏：显示会话标题、消息计数、过滤器、多选操作、刷新和滚动按钮 */}
-      <div className="p-4 border-b border-border flex items-center justify-between bg-card shrink-0">
-        <div className="flex items-center gap-3">
+      <div className="p-4 border-b border-border flex items-start justify-between gap-4 bg-card shrink-0">
+        <div className="flex items-start gap-3 min-w-0 shrink">
           {/* 侧边栏折叠时显示展开按钮 */}
           {sidebarCollapsed && (
             <motion.button
               onClick={onExpandSidebar}
-              className="p-2 rounded-lg hover:bg-accent transition-colors"
+              className="p-2 rounded-lg hover:bg-accent transition-colors shrink-0 mt-0.5"
               title="展开侧边栏"
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.95 }}
@@ -288,11 +307,11 @@ export function ChatView({
               <ChevronRight className="w-5 h-5" />
             </motion.button>
           )}
-          <div>
-            <h2 className="text-lg font-semibold text-foreground">
+          <div className="min-w-[8rem]">
+            <h2 className="text-lg font-semibold text-foreground truncate">
               会话: {session.name || session.id.substring(0, 8)}
             </h2>
-            <p className="text-sm text-muted-foreground">
+            <p className="text-sm text-muted-foreground break-words">
               {formatTimestamp(session.timestamp)} ·{' '}
               {searchQuery.trim() || filter !== 'all'
                 ? `显示 ${filteredMessages.length}/${totalMessages} 条消息`
@@ -308,7 +327,7 @@ export function ChatView({
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
           {/* 搜索输入框：带搜索图标和可选的清除按钮 */}
           <div className="relative">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
@@ -317,7 +336,7 @@ export function ChatView({
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="搜索消息..."
-              className="pl-8 pr-3 py-1.5 w-40 rounded-lg bg-secondary text-foreground border border-border focus:outline-none focus:ring-2 focus:ring-ring text-sm"
+              className="pl-8 pr-3 py-1.5 w-40 rounded-lg bg-secondary text-foreground border border-border focus:outline-none focus:border-ring text-sm"
             />
             {/* 搜索内容不为空时显示清除按钮 */}
             {searchQuery && (
@@ -523,12 +542,12 @@ export function ChatView({
       </div>
 
       {/* 消息列表：可滚动区域，遍历渲染所有经过过滤的消息 */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
+      <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-4 custom-scrollbar">
         {filteredMessages.length === 0 ? (
           /* 空消息列表占位提示 */
           <div className="text-center text-muted-foreground py-8">没有消息</div>
         ) : (
-          filteredMessages.map((msg, index) => (
+          filteredMessages.map((msg) => (
             <motion.div
               key={msg.uuid}
               initial={{ opacity: 0, y: 10 }}

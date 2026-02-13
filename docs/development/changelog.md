@@ -4,6 +4,107 @@
 
 ---
 
+## [0.4.0-beta.1] — 2025
+
+### 新增
+
+#### UI 重构：动画与图标系统
+
+- 引入 **motion/react**（Framer Motion）作为动画引擎，替代原有的 CSS 动画
+  - 侧边栏展开/折叠带有宽度 + 透明度过渡
+  - 项目展开/折叠带有高度 + 透明度过渡，会话列表使用交错动画（staggered animation）
+  - 设置面板使用缩放 + 位移入场/退场动画，标签页切换带有左滑/右滑过渡
+  - 消息卡片使用淡入 + 上移入场动画
+  - 按钮普遍添加 `whileHover` 缩放和 `whileTap` 回弹效果
+- 引入 **lucide-react** 图标库，替代所有内联 SVG 图标
+  - 使用语义化图标组件（Settings、Search、Trash2、Filter、Download 等），提升可读性和可维护性
+- 设置齿轮图标悬停时旋转 180°（弹簧动画，`stiffness: 300, damping: 15`）
+- 主题切换图标悬停时旋转 180°，使用 motion variant 传播机制驱动子元素动画
+
+#### 消息内容渲染系统
+
+- 新增 **MessageBlockList** 组件：消息内容块列表入口，处理 string / MessageContent[] 两种格式
+- 新增 **MessageContentRenderer** 组件：按 type 分类渲染 5 种内容块
+  - `text`：预格式化文本，保留空白符并自动换行
+  - `tool_use`：蓝色左边框可折叠面板，显示工具名称和 JSON 参数
+  - `tool_result`：绿色左边框（错误时红色），支持嵌套内容递归渲染
+  - `thinking`：紫色虚线左边框，默认折叠，斜体淡色显示
+  - `image`：Base64 data URI 内联图片渲染
+
+#### 侧边栏增强
+
+- **拖动调整宽度**：侧边栏右边缘可拖动调整宽度（绝对定位手柄，`z-20`）
+  - 拖动时禁用过渡动画，确保实时跟手
+  - 使用 `useRef` 追踪拖动状态，避免全局事件监听器中的闭包陈旧问题
+- **自动折叠**：拖动宽度低于 160px 后松开鼠标自动折叠，低于 220px 回弹到最小宽度
+- **折叠/展开**：侧边栏折叠时在 ChatView 顶部显示展开按钮
+- **渐变背景**：天蓝色到淡紫色的线性渐变（`#eef6ff → #f3eeff`，暗色模式 `#0f1a2e → #1a1530`）
+- **渐变标题**：「Claude Code Reader」标题使用紫色到粉色渐变文字 + 流动动画
+- **会话删除**：每个会话条目悬停时显示删除按钮
+- 底部统计信息栏显示项目总数和会话总数
+
+#### 聊天视图增强
+
+- **多选模式**：支持复选框选择、全选/取消全选、批量删除已选消息
+- **消息搜索**：工具栏搜索框支持按消息文本模糊过滤（大小写不敏感）
+- **自定义过滤器下拉菜单**：替代原生 `<select>`，带有动画和图标
+- **导出功能**：下拉菜单支持 Markdown 和 JSON 两种格式导出（使用 Tauri 文件保存对话框）
+- **Token 统计汇总**：工具栏显示整个会话的输入/输出/缓存 Token 总计
+- **动画空状态**：未选择会话时显示呼吸 + 摇摆动画的聊天气泡图标 + 渐变文字
+
+#### 设置面板增强
+
+- **三模式主题切换**：分段控制按钮（浅色 Sun / 自动 SunMoon / 深色 Moon），使用 `layoutId` 实现滑动指示器动画
+- **固定面板高度**：`h-[80vh]`，内容区垂直滚动，外层 `overflow-hidden` 确保圆角裁剪正确
+- **标签页滑动指示条**：活动标签下方的紫色指示条使用 `layoutId` 实现跨标签滑动动画
+
+#### 环境配置切换器增强
+
+- 下拉菜单宽度改为 `w-full`，与触发按钮宽度保持一致
+
+#### 主题与样式
+
+- **紫色主题滚动条**：全局自定义滚动条使用紫色调（`#c4b5fd` / `#a78bfa`，暗色 `#4c3a8a` / `#7c5cbf`）
+- **渐变加载旋转器**：紫粉渐变替代单色 border 旋转器
+- **内容块样式**：工具调用、工具结果、思考过程使用独立配色的左边框卡片样式
+
+### 修复
+
+#### 侧边栏被长内容撑开
+
+- **根因**：ChatView 主视图根 div 缺少 `min-w-0`，flex 子项默认 `min-width: auto` 导致内容的固有最小宽度撑开整个布局
+- **修复**：在 ChatView 两个返回路径的根 div 均添加 `min-w-0`；Sidebar 的 motion.div 设置 `flexShrink: 0, minWidth: 0, overflow: hidden`
+
+#### EnvSwitcher 下拉菜单被遮挡
+
+- **根因**：侧边栏头部区域使用了 `overflow-hidden`，裁剪了下拉菜单
+- **修复**：将头部改为 `relative z-10`，不使用 `overflow-hidden`
+
+#### 设置面板圆角穿透
+
+- **根因**：内部 `bg-card` 元素的直角矩形在 `rounded-xl` 父容器的圆角处穿透可见
+- **修复**：面板主体添加 `overflow-hidden`
+
+#### 搜索框焦点环残影
+
+- **根因**：`focus:ring-2` 使用 `box-shadow` 实现，Chromium WebView 失焦后 `box-shadow` 未及时重绘，在底部留下一条紫色细线
+- **修复**：将 `focus:ring-2 focus:ring-ring` 改为 `focus:border-ring`（基于 border-color，不使用 box-shadow）
+
+#### 内容块溢出
+
+- **修复**：CSS 中 `.tool-use-block`、`.tool-result-block`、`.thinking-block` 均添加 `overflow: hidden`，防止内容撑开容器
+
+### 技术变更
+
+- 前端新增依赖：`motion`（motion/react）、`lucide-react`
+- App.tsx 新增 5 个状态变量（`selectedMessages`、`selectionMode`、`sidebarCollapsed`、`sidebarWidth`、`isResizingSidebar`）和 1 个 ref（`isResizingRef`）
+- App.tsx 新增 8 个 `useCallback` 回调和 1 个 `useEffect`（拖动事件监听）
+- 组件总数从 4 个增加到 6 个（新增 MessageBlockList、MessageContentRenderer）
+- ChatView Props 从 5 个扩展到 14 个
+- Sidebar Props 从 8 个扩展到 14 个
+
+---
+
 ## [0.3.0-beta.2] — 2025
 
 ### 新增
@@ -73,7 +174,6 @@
 ### 已知限制
 
 - 权限管理为只读显示，不支持编辑
-- 消息内容以纯文本渲染，不支持 Markdown 格式
 - 不显示 agent-*.jsonl 子任务会话文件
 - 无分页加载，大型会话可能影响性能
 - 主题偏好不持久化，重启后重置为跟随系统

@@ -108,7 +108,7 @@ export function EnvSwitcher({
       <AnimatePresence>
         {showDropdown && (
           <motion.div
-            className="absolute top-full left-0 mt-1 w-64 bg-card rounded-lg shadow-xl border border-border z-50"
+            className="absolute top-full left-0 mt-1 w-full bg-card rounded-lg shadow-xl border border-border z-50"
             initial={{ opacity: 0, y: -8, scale: 0.96 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -8, scale: 0.96 }}

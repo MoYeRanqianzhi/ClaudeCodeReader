@@ -24,6 +24,10 @@ interface SidebarProps {
   currentSession: Session | null;
   /** 环境配置切换器所需的配置数据（包含配置列表和当前激活的配置 ID） */
   envConfig: EnvSwitcherConfig;
+  /** 侧边栏宽度（像素），由父组件管理，支持拖动调整 */
+  width: number;
+  /** 是否正在拖动调整侧边栏宽度，为 true 时禁用过渡动画以获得实时拖动体验 */
+  isResizing: boolean;
   /** 选中项目时触发的回调 */
   onSelectProject: (project: Project) => void;
   /** 选中会话时触发的回调 */
@@ -62,6 +66,8 @@ export function Sidebar({
   currentProject,
   currentSession,
   envConfig,
+  width,
+  isResizing,
   onSelectProject,
   onSelectSession,
   onDeleteSession,
@@ -104,28 +110,43 @@ export function Sidebar({
   };
 
   return (
-    /* 根容器：使用 motion.div 实现侧边栏展开/收起的宽度动画 */
+    /*
+     * 动画容器（也是 App flex 布局的子项）
+     *
+     * 宽度约束关键点：
+     * - minWidth: 0 ——— 覆盖 flex 子项默认的 min-width:auto，
+     *   防止内容的 intrinsic minimum width 把侧边栏撑得比 animate.width 更宽。
+     *   这是整个宽度限制链路中最关键的一环。
+     * - overflow: hidden 仅用于展开/收起动画时裁剪过渡帧，
+     *   不依赖它来限制内容宽度。
+     */
     <motion.div
-      className="w-72 h-full flex flex-col bg-sidebar border-r border-border custom-scrollbar overflow-hidden"
-      initial={false}
-      animate={{ width: 288 }}
+      className="h-full flex flex-col sidebar-gradient border-r border-border"
+      initial={{ width: 0, opacity: 0 }}
+      animate={{ width, opacity: 1 }}
       exit={{ width: 0, opacity: 0 }}
-      transition={{ duration: 0.2, ease: [0.4, 0, 0.2, 1] }}
+      transition={isResizing ? { duration: 0 } : { duration: 0.2, ease: [0.4, 0, 0.2, 1] }}
+      style={{ flexShrink: 0, minWidth: 0, overflow: 'hidden' }}
     >
-      {/* 头部区域：应用标题和设置按钮，设置 shrink-0 防止在空间不足时被压缩 */}
-      <div className="p-4 border-b border-border shrink-0">
+      {/* 头部区域：relative + z-10 确保 EnvSwitcher 下拉菜单浮于项目列表之上 */}
+      <div className="p-4 border-b border-border shrink-0 relative z-10">
         <div className="flex items-center justify-between mb-3">
-          <h1 className="text-lg font-semibold text-foreground">Claude Code Reader</h1>
-          <div className="flex items-center gap-1">
-            {/* 设置按钮：使用 motion.button 添加悬停缩放和点击回弹效果 */}
+          <h1 className="text-lg font-semibold gradient-text animate-gradient whitespace-nowrap">Claude Code Reader</h1>
+          <div className="flex items-center gap-1 shrink-0">
+            {/* 设置按钮：悬停时图标旋转 180°，使用 variant 传播机制驱动子元素动画 */}
             <motion.button
               onClick={onOpenSettings}
               className="p-2 rounded-lg hover:bg-accent transition-colors"
               title="设置"
-              whileHover={{ scale: 1.05 }}
+              whileHover="hover"
               whileTap={{ scale: 0.95 }}
             >
-              <Settings className="w-5 h-5" />
+              <motion.div
+                variants={{ hover: { rotate: 180 } }}
+                transition={{ type: "spring", stiffness: 300, damping: 15 }}
+              >
+                <Settings className="w-5 h-5" />
+              </motion.div>
             </motion.button>
             {/* 折叠侧边栏按钮：使用 motion.button 添加悬停缩放和点击回弹效果 */}
             <motion.button
@@ -164,8 +185,13 @@ export function Sidebar({
         </div>
       </div>
 
-      {/* 项目列表：可折叠的树形结构，展示所有匹配搜索条件的项目 */}
-      <div className="flex-1 overflow-y-auto">
+      {/*
+       * 项目列表滚动容器
+       * - overflow-y-auto：垂直方向可滚动
+       * - overflow-x-auto：水平方向超长内容显示滚动条而非撑宽父容器
+       * - overflow-x-auto 同时建立 BFC，子元素宽度以此容器为边界
+       */}
+      <div className="flex-1 overflow-y-auto overflow-x-auto custom-scrollbar">
         {filteredProjects.length === 0 ? (
           <div className="p-4 text-center text-muted-foreground">
             {searchTerm ? '没有找到匹配的项目' : '没有找到任何项目'}
@@ -187,6 +213,7 @@ export function Sidebar({
               >
                 {/* 展开/折叠指示箭头：使用 motion.div 实现平滑的旋转动画 */}
                 <motion.div
+                  className="shrink-0"
                   animate={{ rotate: expandedProjects.has(project.path) ? 90 : 0 }}
                   transition={{ duration: 0.15, ease: 'easeInOut' }}
                 >
@@ -199,7 +226,7 @@ export function Sidebar({
                   <div className="text-xs text-muted-foreground truncate">{project.path}</div>
                 </div>
                 {/* 会话计数徽章：使用 bg-muted 替代 bg-secondary 保持与整体风格一致 */}
-                <span className="text-xs bg-muted px-2 py-1 rounded-full text-muted-foreground">
+                <span className="text-xs bg-muted px-2 py-1 rounded-full text-muted-foreground shrink-0 whitespace-nowrap">
                   {project.sessions.length}
                 </span>
               </motion.button>
@@ -215,18 +242,22 @@ export function Sidebar({
                     transition={{ duration: 0.2, ease: [0.4, 0, 0.2, 1] }}
                     style={{ overflow: 'hidden' }}
                   >
-                    {project.sessions.map((session) => (
-                      <div
+                    {project.sessions.map((session, sessionIndex) => (
+                      <motion.div
                         key={session.id}
-                        className={`group relative w-full p-3 pl-10 text-left hover:bg-accent transition-colors cursor-pointer ${
+                        initial={{ x: -20, opacity: 0 }}
+                        animate={{ x: 0, opacity: 1 }}
+                        transition={{ delay: sessionIndex * 0.03, duration: 0.2, ease: 'easeOut' }}
+                        className={`group relative p-3 pl-10 text-left hover:bg-accent transition-colors cursor-pointer ${
                           currentSession?.id === session.id ? 'bg-accent border-l-2 border-primary' : ''
                         }`}
                         onClick={() => onSelectSession(session)}
                       >
-                        <div className="text-sm text-foreground truncate pr-6">
+                        {/* 会话名称：超长时显示水平滚动条 */}
+                        <div className="text-sm text-foreground whitespace-nowrap overflow-x-auto pr-6 custom-scrollbar">
                           {session.name || session.id.substring(0, 8)}
                         </div>
-                        <div className="text-xs text-muted-foreground">
+                        <div className="text-xs text-muted-foreground whitespace-nowrap">
                           {formatTimestamp(session.timestamp)}
                         </div>
                         {/* 删除按钮：使用 motion.button 添加悬停/点击效果，hover 时显示，阻止事件冒泡防止触发会话选择 */}
@@ -242,7 +273,7 @@ export function Sidebar({
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </motion.button>
-                      </div>
+                      </motion.div>
                     ))}
                   </motion.div>
                 )}
@@ -252,8 +283,8 @@ export function Sidebar({
         )}
       </div>
 
-      {/* 底部信息：设置 shrink-0 防止在空间不足时被压缩 */}
-      <div className="p-3 border-t border-border text-xs text-muted-foreground shrink-0">
+      {/* 底部信息：shrink-0 防止被压缩 */}
+      <div className="p-3 border-t border-border text-xs text-muted-foreground shrink-0 whitespace-nowrap">
         共 {projects.length} 个项目，{projects.reduce((acc, p) => acc + p.sessions.length, 0)} 个会话
       </div>
     </motion.div>
