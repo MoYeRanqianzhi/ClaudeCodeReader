@@ -1,6 +1,6 @@
 {
   "name": "claude-code-reader",
-  "version": "1.0.0-beta.1",
+  "version": "1.0.0-rc.1",
   "type": "module",
   "description": "A desktop application for viewing and managing Claude Code session records and settings",
   "author": "墨叶染千枝",
@@ -37,9 +37,9 @@
     "linux"
   ],
   "optionalDependencies": {
-    "claude-code-reader-win32-x64": "1.0.0-beta.1",
-    "claude-code-reader-darwin-arm64": "1.0.0-beta.1",
-    "claude-code-reader-darwin-x64": "1.0.0-beta.1",
-    "claude-code-reader-linux-x64": "1.0.0-beta.1"
+    "claude-code-reader-win32-x64": "1.0.0-rc.1",
+    "claude-code-reader-darwin-arm64": "1.0.0-rc.1",
+    "claude-code-reader-darwin-x64": "1.0.0-rc.1",
+    "claude-code-reader-linux-x64": "1.0.0-rc.1"
   }
 }

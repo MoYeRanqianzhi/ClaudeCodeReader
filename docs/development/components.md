@@ -531,7 +531,7 @@ SettingsPanel (motion.div, fixed 全屏覆盖层, z-50, backdrop-blur-sm)
     │       │   ├── 允许列表
     │       │   └── 拒绝列表
     │       └── [about] 关于 (motion.div)
-    │           ├── 版本 (v1.0.0-beta.1)
+    │           ├── 版本 (v1.0.0-rc.1)
     │           ├── 开发者
     │           ├── GitHub 链接 (Github 图标)
     │           └── 简介
