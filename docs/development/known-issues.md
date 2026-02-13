@@ -1,6 +1,6 @@
 # 已知问题与限制
 
-本文档记录 ClaudeCodeReader (CCR) 当前版本（0.3.0-beta.1）中已知的功能限制、设计注意事项、平台差异和 UI/UX 局限性。
+本文档记录 ClaudeCodeReader (CCR) 当前版本（0.3.0-beta.2）中已知的功能限制、设计注意事项、平台差异和 UI/UX 局限性。
 
 ---
 
