@@ -417,6 +417,33 @@ export async function deleteSession(sessionFilePath: string): Promise<void> {
   return invoke<void>('delete_session', { sessionFilePath });
 }
 
+// ============ 文件系统辅助 ============
+
+/**
+ * 检查指定路径的文件是否存在
+ *
+ * 通过 Rust 后端检查文件系统中文件是否存在。
+ * 用于在渲染工具结果的"打开文件位置"按钮前判断按钮是否应该可用。
+ *
+ * @param filePath - 要检查的文件的绝对路径
+ * @returns 文件存在返回 true，否则返回 false
+ */
+export async function checkFileExists(filePath: string): Promise<boolean> {
+  return invoke<boolean>('check_file_exists', { filePath });
+}
+
+/**
+ * 在系统文件管理器中打开指定文件所在的目录
+ *
+ * 通过 Rust 后端调用系统命令打开文件管理器并选中目标文件。
+ * Windows 使用 explorer，macOS 使用 Finder，Linux 使用 xdg-open。
+ *
+ * @param filePath - 要在文件管理器中打开的文件绝对路径
+ */
+export async function openInExplorer(filePath: string): Promise<void> {
+  return invoke<void>('open_in_explorer', { filePath });
+}
+
 /**
  * 提取消息的纯文本内容
  *

@@ -390,3 +390,45 @@ export interface AppState {
   /** Claude 数据目录路径：即 ~/.claude/ 的完整路径 */
   claudeDataPath: string;
 }
+
+/**
+ * 显示用消息接口
+ *
+ * 由 messageTransform.ts 的 transformForDisplay() 函数生成，
+ * 是原始 SessionMessage 经过拆分和重组后的显示层数据结构。
+ *
+ * 核心变化：将 user 消息中的 tool_result 内容块拆分为独立的 DisplayMessage，
+ * 使其在 ChatView 中作为独立气泡渲染，而不是作为用户消息的一部分。
+ *
+ * @see transformForDisplay - 生成此类型的转换函数
+ */
+export interface DisplayMessage {
+  /** 原始消息的 UUID，用于编辑/删除操作时映射回原始数据 */
+  sourceUuid: string;
+  /**
+   * 显示用唯一标识符，用作 React key：
+   * - 原始消息：直接使用 uuid
+   * - 拆分出的工具结果：使用 "uuid-tool-N" 格式（N 为序号）
+   */
+  displayId: string;
+  /**
+   * 显示类型，决定消息气泡的视觉样式：
+   * - 'user'：用户消息（蓝色调）
+   * - 'assistant'：助手消息（灰色调）
+   * - 'tool_result'：工具结果（绿色调，从 user 消息中拆分而来）
+   */
+  displayType: 'user' | 'assistant' | 'tool_result';
+  /** 时间戳：继承自原始消息的 ISO 8601 时间字符串 */
+  timestamp: string;
+  /** 内容块列表：仅包含属于该 DisplayMessage 的内容块 */
+  content: MessageContent[];
+  /** 原始消息引用：用于获取 model、usage、cwd 等元数据 */
+  rawMessage: SessionMessage;
+  /** 是否可编辑 */
+  editable: boolean;
+  /**
+   * 块索引映射：blockIndexMap[i] 表示 content[i] 在原始消息 content 数组中的索引。
+   * 编辑操作时通过此映射将修改精确回写到原始消息的正确位置。
+   */
+  blockIndexMap: number[];
+}
