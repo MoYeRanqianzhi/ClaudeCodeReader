@@ -75,6 +75,9 @@ pub fn run() {
             commands::messages::delete_messages,
             commands::messages::edit_message_content,
             commands::messages::delete_session,
+            // 文件系统辅助 commands
+            commands::settings::check_file_exists,
+            commands::settings::open_in_explorer,
         ])
         // `setup` 闭包：在应用窗口创建之前执行的初始化钩子
         .setup(|app| {
