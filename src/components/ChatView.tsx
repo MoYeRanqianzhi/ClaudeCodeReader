@@ -12,10 +12,12 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   ChevronRight, Search, X, CheckSquare, Square, Filter,
   Download, FileText, FileJson, RefreshCw, ArrowDown,
-  Copy, Edit2, Trash2, MessageSquare, Bot, User, Lightbulb
+  Copy, Edit2, Trash2, MessageSquare, Bot, User, Lightbulb, Wrench
 } from 'lucide-react';
-import type { SessionMessage, Session } from '../types/claude';
+import type { SessionMessage, Session, DisplayMessage } from '../types/claude';
 import { getMessageText, formatTimestamp } from '../utils/claudeData';
+import { transformForDisplay } from '../utils/messageTransform';
+import type { ToolUseInfo } from '../utils/messageTransform';
 import { MessageBlockList } from './MessageBlockList';
 import { MessageContentRenderer } from './MessageContentRenderer';
 
@@ -27,6 +29,8 @@ interface ChatViewProps {
   session: Session | null;
   /** 当前会话中的所有消息列表 */
   messages: SessionMessage[];
+  /** 当前项目根目录路径，用于工具显示的路径简化 */
+  projectPath: string;
   /** 编辑消息的回调函数，接收消息 UUID 和按块索引的编辑列表 */
   onEditMessage: (uuid: string, blockEdits: { index: number; text: string }[]) => void;
   /** 删除消息的回调函数，接收待删除消息的 UUID */
@@ -75,6 +79,7 @@ interface ChatViewProps {
 export function ChatView({
   session,
   messages,
+  projectPath,
   onEditMessage,
   onDeleteMessage,
   onRefresh,
@@ -97,6 +102,11 @@ export function ChatView({
    * 仅包含可编辑的块（text 和 thinking），tool_use/tool_result/image 以只读方式展示。
    */
   const [editBlocks, setEditBlocks] = useState<{ index: number; type: string; text: string }[]>([]);
+  /**
+   * 正在编辑的消息的原始 UUID（sourceUuid），用于提交编辑时定位原始消息。
+   * 与 editingId（displayId）配合使用：editingId 用于 UI 匹配，editingSourceUuid 用于数据操作。
+   */
+  const [editingSourceUuid, setEditingSourceUuid] = useState<string | null>(null);
   /** 消息过滤器状态：'all' 显示全部，'user' 仅显示用户消息，'assistant' 仅显示助手消息 */
   const [filter, setFilter] = useState<'all' | 'user' | 'assistant'>('all');
   /** 搜索关键词：用于在消息文本中查找匹配内容，空字符串表示不搜索 */
@@ -105,6 +115,18 @@ export function ChatView({
   const [showFilterDropdown, setShowFilterDropdown] = useState(false);
   /** 控制导出下拉菜单的显示/隐藏状态 */
   const [showExportDropdown, setShowExportDropdown] = useState(false);
+
+  /**
+   * 将原始 SessionMessage[] 预处理为 DisplayMessage[]。
+   * - 把 user 消息中的 tool_result 块拆分为独立的虚拟消息
+   * - 构建 tool_use_id → ToolUseInfo 映射（用于工具结果标题显示）
+   * 仅在 messages 数组引用变化时重新计算。
+   */
+  const { displayMessages, toolUseMap } = useMemo(
+    () => transformForDisplay(messages),
+    [messages]
+  );
+
   /** 消息列表底部的哨兵元素引用，用于自动滚动定位 */
   const messagesEndRef = useRef<HTMLDivElement>(null);
   /** 标记当前会话是否为首次加载消息，首次时使用瞬间跳转而非平滑滚动 */
@@ -136,27 +158,25 @@ export function ChatView({
   }, []);
 
   /**
-   * 根据当前过滤器和搜索关键词筛选消息列表。
+   * 根据当前过滤器和搜索关键词筛选 DisplayMessage 列表。
    * 筛选流程：
-   * 1. 排除非 user/assistant 类型的系统消息
-   * 2. 根据 filter 状态过滤角色
-   * 3. 如果有搜索关键词，进一步过滤包含关键词的消息（大小写不敏感）
+   * 1. 根据 filter 状态过滤角色（tool_result 仅在 'all' 模式下显示）
+   * 2. 如果有搜索关键词，进一步过滤包含关键词的消息（大小写不敏感）
    */
-  const filteredMessages = messages.filter((msg) => {
-    if (msg.type !== 'user' && msg.type !== 'assistant') return false;
-    if (filter !== 'all' && msg.type !== filter) return false;
+  const filteredMessages = displayMessages.filter((msg) => {
+    /* 过滤器逻辑：'user' 只显示用户消息，'assistant' 只显示助手消息，'all' 显示全部 */
+    if (filter === 'user' && msg.displayType !== 'user') return false;
+    if (filter === 'assistant' && msg.displayType !== 'assistant') return false;
     // 搜索关键词过滤：在消息文本中进行大小写不敏感的匹配
     if (searchQuery.trim()) {
-      const text = getMessageText(msg).toLowerCase();
+      const text = getMessageText(msg.rawMessage).toLowerCase();
       return text.includes(searchQuery.trim().toLowerCase());
     }
     return true;
   });
 
-  /** 过滤前的总消息数（仅 user/assistant 类型），用于显示 "N/M" 计数 */
-  const totalMessages = messages.filter(
-    (msg) => msg.type === 'user' || msg.type === 'assistant'
-  ).length;
+  /** 过滤前的总显示消息数，用于显示 "N/M" 计数 */
+  const totalMessages = displayMessages.length;
 
   /**
    * 计算当前会话的 Token 使用量汇总。
@@ -206,51 +226,47 @@ export function ChatView({
   }, [messages]);
 
   /**
-   * 开始编辑指定消息。
-   * 提取消息中所有可编辑内容块（text 和 thinking）的文本，
-   * 按原始索引存储到 editBlocks 状态中。
+   * 开始编辑指定的显示消息。
+   * 从 DisplayMessage 的 content 中提取可编辑块（text 和 thinking），
+   * 使用 blockIndexMap 映射回原始消息中的索引。
    *
-   * @param msg - 要编辑的消息对象
+   * @param msg - 要编辑的 DisplayMessage 对象
    */
-  const handleStartEdit = (msg: SessionMessage) => {
-    setEditingId(msg.uuid);
+  const handleStartEdit = (msg: DisplayMessage) => {
+    setEditingId(msg.displayId);
+    setEditingSourceUuid(msg.sourceUuid);
 
-    const content = msg.message?.content;
-    if (typeof content === 'string') {
-      // 字符串格式：作为单个 text 块处理
-      setEditBlocks([{ index: 0, type: 'text', text: content }]);
-    } else if (Array.isArray(content)) {
-      // 数组格式：提取所有可编辑块（text 和 thinking）
-      const blocks: { index: number; type: string; text: string }[] = [];
-      content.forEach((block, idx) => {
-        if (block.type === 'text') {
-          blocks.push({ index: idx, type: 'text', text: block.text || '' });
-        } else if (block.type === 'thinking') {
-          blocks.push({ index: idx, type: 'thinking', text: block.thinking || block.text || '' });
-        }
-      });
-      // 如果没有可编辑块，创建一个空的 text 块
-      if (blocks.length === 0) {
-        blocks.push({ index: -1, type: 'text', text: '' });
+    // 从 DisplayMessage 的 content 中提取可编辑块
+    const blocks: { index: number; type: string; text: string }[] = [];
+    msg.content.forEach((block, displayIdx) => {
+      const originalIndex = msg.blockIndexMap[displayIdx];
+      if (block.type === 'text') {
+        blocks.push({ index: originalIndex, type: 'text', text: block.text || '' });
+      } else if (block.type === 'thinking') {
+        blocks.push({ index: originalIndex, type: 'thinking', text: block.thinking || block.text || '' });
       }
-      setEditBlocks(blocks);
-    } else {
-      setEditBlocks([{ index: 0, type: 'text', text: '' }]);
+    });
+
+    // 如果没有可编辑块，创建一个空的 text 块
+    if (blocks.length === 0) {
+      blocks.push({ index: -1, type: 'text', text: '' });
     }
+    setEditBlocks(blocks);
   };
 
   /**
    * 保存编辑后的消息内容。
-   * 将 editBlocks 中的修改通过 onEditMessage 回调持久化，然后退出编辑模式。
+   * 使用 editingSourceUuid（原始消息 UUID）通过 onEditMessage 回调持久化，然后退出编辑模式。
    */
   const handleSaveEdit = () => {
-    if (editingId) {
+    if (editingId && editingSourceUuid) {
       // 过滤掉新建的块（index === -1 且内容为空）
       const blockEdits = editBlocks
         .filter(b => b.index >= 0)
         .map(b => ({ index: b.index, text: b.text }));
-      onEditMessage(editingId, blockEdits);
+      onEditMessage(editingSourceUuid, blockEdits);
       setEditingId(null);
+      setEditingSourceUuid(null);
       setEditBlocks([]);
     }
   };
@@ -261,6 +277,7 @@ export function ChatView({
    */
   const handleCancelEdit = () => {
     setEditingId(null);
+    setEditingSourceUuid(null);
     setEditBlocks([]);
   };
 
@@ -272,6 +289,30 @@ export function ChatView({
    */
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
+  };
+
+  /**
+   * 获取 DisplayMessage 的文本内容，用于复制到剪贴板。
+   * - user/assistant 消息：使用原始消息的文本提取
+   * - tool_result 消息：提取工具返回的文本内容
+   *
+   * @param msg - DisplayMessage 对象
+   * @returns 消息的可读文本内容
+   */
+  const getDisplayText = (msg: DisplayMessage): string => {
+    if (msg.displayType !== 'tool_result') {
+      return getMessageText(msg.rawMessage);
+    }
+    // tool_result 消息：提取工具返回的文本
+    return msg.content.map(block => {
+      if (block.type === 'tool_result') {
+        if (typeof block.content === 'string') return block.content;
+        if (Array.isArray(block.content)) {
+          return (block.content as Array<{ text?: string }>).map(b => b.text || '').join('\n');
+        }
+      }
+      return '';
+    }).filter(Boolean).join('\n');
   };
 
   /* 空状态：未选择任何会话时显示引导界面 */
@@ -403,7 +444,7 @@ export function ChatView({
                   initial={{ opacity: 0, scale: 0.8 }}
                   animate={{ opacity: 1, scale: 1 }}
                   exit={{ opacity: 0, scale: 0.8 }}
-                  onClick={() => onSelectAll(filteredMessages.map(m => m.uuid))}
+                  onClick={() => onSelectAll([...new Set(filteredMessages.map(m => m.sourceUuid))])}
                   className="px-3 py-1.5 rounded-lg bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors text-sm"
                   whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.95 }}
@@ -573,7 +614,7 @@ export function ChatView({
         </div>
       </div>
 
-      {/* 消息列表：可滚动区域，遍历渲染所有经过过滤的消息 */}
+      {/* 消息列表：可滚动区域，遍历渲染所有经过过滤的 DisplayMessage */}
       <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-4 custom-scrollbar">
         {filteredMessages.length === 0 ? (
           /* 空消息列表占位提示 */
@@ -581,16 +622,18 @@ export function ChatView({
         ) : (
           filteredMessages.map((msg) => (
             <motion.div
-              key={msg.uuid}
+              key={msg.displayId}
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.2 }}
               className={`rounded-xl p-4 message-bubble ${
-                msg.type === 'user'
+                msg.displayType === 'user'
                   ? 'bg-primary/5 border border-primary/10'
-                  : 'bg-muted/50 border border-border'
-              } ${selectionMode && selectedMessages.has(msg.uuid) ? 'ring-2 ring-primary' : ''}`}
-              onClick={selectionMode ? () => onToggleSelect(msg.uuid) : undefined}
+                  : msg.displayType === 'tool_result'
+                    ? 'bg-emerald-500/5 border border-emerald-500/10'
+                    : 'bg-muted/50 border border-border'
+              } ${selectionMode && selectedMessages.has(msg.sourceUuid) ? 'ring-2 ring-primary' : ''}`}
+              onClick={selectionMode ? () => onToggleSelect(msg.sourceUuid) : undefined}
               style={selectionMode ? { cursor: 'pointer' } : undefined}
             >
               {/* 消息头部：显示复选框（选择模式）、角色标签、时间戳、模型信息和操作按钮 */}
@@ -601,40 +644,44 @@ export function ChatView({
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-                        onToggleSelect(msg.uuid);
+                        onToggleSelect(msg.sourceUuid);
                       }}
                       className="text-muted-foreground hover:text-foreground transition-colors"
                     >
-                      {selectedMessages.has(msg.uuid) ? (
+                      {selectedMessages.has(msg.sourceUuid) ? (
                         <CheckSquare className="w-4 h-4 text-primary" />
                       ) : (
                         <Square className="w-4 h-4" />
                       )}
                     </button>
                   )}
-                  {/* 角色徽章：圆形药丸样式，带图标区分用户/助手 */}
+                  {/* 角色徽章：根据 displayType 区分用户/助手/工具结果 */}
                   <span
                     className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                      msg.type === 'user'
+                      msg.displayType === 'user'
                         ? 'bg-primary text-primary-foreground'
-                        : 'bg-secondary text-secondary-foreground'
+                        : msg.displayType === 'tool_result'
+                          ? 'bg-emerald-600 text-white'
+                          : 'bg-secondary text-secondary-foreground'
                     }`}
                   >
-                    {msg.type === 'user' ? (
+                    {msg.displayType === 'user' ? (
                       <User className="w-3 h-3" />
+                    ) : msg.displayType === 'tool_result' ? (
+                      <Wrench className="w-3 h-3" />
                     ) : (
                       <Bot className="w-3 h-3" />
                     )}
-                    {msg.type === 'user' ? '用户' : '助手'}
+                    {msg.displayType === 'user' ? '用户' : msg.displayType === 'tool_result' ? '工具结果' : '助手'}
                   </span>
                   {/* 消息时间戳 */}
                   <span className="text-xs text-muted-foreground">
                     {formatTimestamp(msg.timestamp)}
                   </span>
-                  {/* 模型信息：仅在消息包含模型字段时显示 */}
-                  {msg.message?.model && (
+                  {/* 模型信息：仅在消息包含模型字段时显示（通常仅 assistant 消息有） */}
+                  {msg.rawMessage.message?.model && msg.displayType === 'assistant' && (
                     <span className="text-xs text-muted-foreground">
-                      模型: {msg.message.model}
+                      模型: {msg.rawMessage.message.model}
                     </span>
                   )}
                 </div>
@@ -643,7 +690,7 @@ export function ChatView({
                   <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                     {/* 复制按钮 */}
                     <motion.button
-                      onClick={() => copyToClipboard(getMessageText(msg))}
+                      onClick={() => copyToClipboard(getDisplayText(msg))}
                       className="p-1.5 rounded hover:bg-accent transition-colors"
                       title="复制"
                       whileHover={{ scale: 1.1 }}
@@ -661,9 +708,9 @@ export function ChatView({
                     >
                       <Edit2 className="w-4 h-4" />
                     </motion.button>
-                    {/* 删除按钮 */}
+                    {/* 删除按钮：使用 sourceUuid 删除原始消息 */}
                     <motion.button
-                      onClick={() => onDeleteMessage(msg.uuid)}
+                      onClick={() => onDeleteMessage(msg.sourceUuid)}
                       className="p-1.5 rounded hover:bg-destructive/10 text-destructive transition-colors"
                       title="删除"
                       whileHover={{ scale: 1.1 }}
@@ -676,7 +723,7 @@ export function ChatView({
               </div>
 
               {/* 消息内容：根据是否处于编辑模式显示不同的 UI */}
-              {editingId === msg.uuid ? (
+              {editingId === msg.displayId ? (
                 /* 编辑模式：按内容块类型分别显示对应样式的编辑器 */
                 <div className="space-y-2">
                   {editBlocks.map((block, blockIdx) => (
@@ -712,16 +759,20 @@ export function ChatView({
                     </div>
                   ))}
                   {/* 只读展示不可编辑的内容块（tool_use/tool_result/image 等） */}
-                  {Array.isArray(msg.message?.content) &&
-                    msg.message.content.some((b: { type: string }) => b.type !== 'text' && b.type !== 'thinking') && (
-                      <div className="prose prose-sm dark:prose-invert max-w-none opacity-60">
-                        {msg.message.content
-                          .filter((b: { type: string }) => b.type !== 'text' && b.type !== 'thinking')
-                          .map((block: any, idx: number) => (
-                            <MessageContentRenderer key={idx} block={block} />
-                          ))}
-                      </div>
-                    )}
+                  {msg.content.some(b => b.type !== 'text' && b.type !== 'thinking') && (
+                    <div className="prose prose-sm dark:prose-invert max-w-none opacity-60">
+                      {msg.content
+                        .filter(b => b.type !== 'text' && b.type !== 'thinking')
+                        .map((block, idx) => (
+                          <MessageContentRenderer
+                            key={idx}
+                            block={block}
+                            projectPath={projectPath}
+                            toolUseMap={toolUseMap}
+                          />
+                        ))}
+                    </div>
+                  )}
                   <div className="flex justify-end gap-2">
                     <button
                       onClick={handleCancelEdit}
@@ -740,15 +791,15 @@ export function ChatView({
               ) : (
                 /* 只读模式：通过 MessageBlockList 渲染所有类型的内容块 */
                 <div className="prose prose-sm dark:prose-invert max-w-none">
-                  <MessageBlockList message={msg} />
+                  <MessageBlockList message={msg.rawMessage} projectPath={projectPath} toolUseMap={toolUseMap} />
                 </div>
               )}
 
-              {/* Token 使用量：显示本条消息消耗的输入/输出 token 数 */}
-              {msg.message?.usage && (
+              {/* Token 使用量：仅对 assistant 消息显示本条消息消耗的输入/输出 token 数 */}
+              {msg.displayType === 'assistant' && msg.rawMessage.message?.usage && (
                 <div className="mt-2 pt-2 border-t border-border/50 text-xs text-muted-foreground">
-                  输入: {msg.message.usage.input_tokens} tokens · 输出:{' '}
-                  {msg.message.usage.output_tokens} tokens
+                  输入: {msg.rawMessage.message.usage.input_tokens} tokens · 输出:{' '}
+                  {msg.rawMessage.message.usage.output_tokens} tokens
                 </div>
               )}
             </motion.div>

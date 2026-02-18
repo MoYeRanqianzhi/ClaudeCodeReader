@@ -4,3 +4,5 @@ export { SettingsPanel } from './SettingsPanel';
 export { EnvSwitcher } from './EnvSwitcher';
 export { MessageContentRenderer } from './MessageContentRenderer';
 export { MessageBlockList } from './MessageBlockList';
+export { ToolUseRenderer } from './ToolUseRenderer';
+export { ToolResultRenderer } from './ToolResultRenderer';

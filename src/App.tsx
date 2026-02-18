@@ -675,6 +675,7 @@ function App() {
       <ChatView
         session={currentSession}
         messages={messages}
+        projectPath={currentProject?.path || ''}
         onEditMessage={handleEditMessage}
         onDeleteMessage={handleDeleteMessage}
         onRefresh={handleRefresh}
