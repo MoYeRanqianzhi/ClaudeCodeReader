@@ -23,7 +23,12 @@
     "desktop"
   ],
   "bin": {
-    "ccr": "./bin/ccr.js"
+    "ccr": "./bin/ccr.js",
+    "cr": "./bin/ccr.js",
+    "ccrr": "./bin/ccr.js",
+    "ClaudeCR": "./bin/ccr.js",
+    "ClaudeCodeR": "./bin/ccr.js",
+    "CCReader": "./bin/ccr.js"
   },
   "files": [
     "bin"

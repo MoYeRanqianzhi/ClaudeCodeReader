@@ -9,7 +9,7 @@
 | 项目 | 值 |
 |------|-----|
 | 包名 | `claude-code-reader` |
-| CLI 命令 | `ccr` |
+| CLI 命令 | `ccr`（默认），另有 `cr`、`ccrr`、`ClaudeCR`、`ClaudeCodeR`、`CCReader` 等别名 |
 | 仓库 | [github.com/MoYeRanQianZhi/ClaudeCodeReader](https://github.com/MoYeRanQianZhi/ClaudeCodeReader) |
 | 许可证 | MIT |
 | Node.js 版本要求 | >= 16.0.0 |
@@ -50,7 +50,7 @@
 npm install -g claude-code-reader
 ```
 
-安装完成后，可在终端中直接运行 `ccr` 命令启动桌面应用。
+安装完成后，可在终端中直接运行 `ccr` 命令（或其他别名如 `cr`、`ccrr`、`CCReader` 等）启动桌面应用。
 
 ### 使用 beta 版本
 
@@ -95,6 +95,18 @@ npm install -g claude-code-reader
 ccr
 ```
 
+由于缩写 `CCR` 可能与其他项目（如 ClaudeCodeRouter）冲突，还提供了以下别名命令，均可启动桌面应用：
+
+```bash
+cr          # 短别名
+ccrr        # ClaudeCodeReader 缩写
+ClaudeCR    # Claude Code Reader
+ClaudeCodeR # Claude Code Reader（完整前缀）
+CCReader    # CC + Reader
+```
+
+所有别名均指向同一入口脚本 `npm/bin/ccr.js`，功能完全等价。
+
 ### 启动流程
 
 `ccr` 命令的入口文件为 `npm/bin/ccr.js`，执行以下逻辑：
@@ -137,7 +149,7 @@ claude-code-reader-{platform}/
 
 | 文件 | 职责 | 执行时机 |
 |------|------|----------|
-| `npm/package.json` | 定义包元数据、CLI bin 映射、optionalDependencies 平台包引用 | NPM 解析包信息时 |
+| `npm/package.json` | 定义包元数据、CLI bin 映射（`ccr`、`cr`、`ccrr`、`ClaudeCR`、`ClaudeCodeR`、`CCReader`）、optionalDependencies 平台包引用 | NPM 解析包信息时 |
 | `npm/bin/ccr.js` | 作为 `ccr` 命令的入口，通过 require.resolve 定位平台包中的二进制文件并以 detached 模式启动 | 用户执行 `ccr` 命令时 |
 | 平台包 `package.json` | 声明平台约束（os/cpu），确保 npm 仅在匹配的系统上安装 | NPM 解析 optionalDependencies 时 |
 | 平台包 `bin/*` | 预编译的桌面应用二进制文件 | `ccr.js` 启动时读取 |

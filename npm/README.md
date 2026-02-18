@@ -26,6 +26,21 @@ ccr
 
 This will launch the Claude Code Reader desktop application.
 
+### Command Aliases
+
+Since the abbreviation `CCR` may conflict with other projects (e.g. ClaudeCodeRouter), the following aliases are also available:
+
+| Command | Description |
+|---------|-------------|
+| `ccr` | Default command |
+| `cr` | Short alias |
+| `ccrr` | ClaudeCodeReader abbreviated |
+| `ClaudeCR` | Claude Code Reader |
+| `ClaudeCodeR` | Claude Code Reader (full prefix) |
+| `CCReader` | CC + Reader |
+
+All aliases are equivalent and launch the same application.
+
 ## Features
 
 - View Claude Code session history
