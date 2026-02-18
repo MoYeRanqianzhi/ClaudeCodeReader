@@ -227,8 +227,14 @@ export function ChatView({
 
   /**
    * 开始编辑指定的显示消息。
-   * 从 DisplayMessage 的 content 中提取可编辑块（text 和 thinking），
+   * 从 DisplayMessage 的 content 中提取所有类型的可编辑块，
    * 使用 blockIndexMap 映射回原始消息中的索引。
+   *
+   * 各块类型的编辑内容：
+   * - text: 编辑 text 字段
+   * - thinking: 编辑 thinking/text 字段
+   * - tool_use: 编辑 input 字段（JSON 格式）
+   * - tool_result: 编辑 content 字段（纯文本）
    *
    * @param msg - 要编辑的 DisplayMessage 对象
    */
@@ -236,14 +242,40 @@ export function ChatView({
     setEditingId(msg.displayId);
     setEditingSourceUuid(msg.sourceUuid);
 
-    // 从 DisplayMessage 的 content 中提取可编辑块
+    // 从 DisplayMessage 的 content 中提取所有可编辑块
     const blocks: { index: number; type: string; text: string }[] = [];
     msg.content.forEach((block, displayIdx) => {
       const originalIndex = msg.blockIndexMap[displayIdx];
-      if (block.type === 'text') {
-        blocks.push({ index: originalIndex, type: 'text', text: block.text || '' });
-      } else if (block.type === 'thinking') {
-        blocks.push({ index: originalIndex, type: 'thinking', text: block.thinking || block.text || '' });
+      switch (block.type) {
+        case 'text':
+          blocks.push({ index: originalIndex, type: 'text', text: block.text || '' });
+          break;
+        case 'thinking':
+          blocks.push({ index: originalIndex, type: 'thinking', text: block.thinking || block.text || '' });
+          break;
+        case 'tool_use':
+          // 将 input 对象序列化为格式化 JSON 字符串以便编辑
+          blocks.push({
+            index: originalIndex,
+            type: 'tool_use',
+            text: JSON.stringify(block.input || {}, null, 2),
+          });
+          break;
+        case 'tool_result': {
+          // 提取 tool_result 的 content 文本
+          let resultText = '';
+          if (typeof block.content === 'string') {
+            resultText = block.content;
+          } else if (Array.isArray(block.content)) {
+            resultText = (block.content as Array<{ text?: string }>)
+              .map(b => b.text || '').join('\n');
+          }
+          blocks.push({ index: originalIndex, type: 'tool_result', text: resultText });
+          break;
+        }
+        default:
+          // image 等其他类型暂不支持编辑，跳过
+          break;
       }
     });
 
@@ -744,6 +776,38 @@ export function ChatView({
                             className="w-full p-2 rounded bg-transparent text-foreground border border-purple-300/40 dark:border-purple-500/30 focus:outline-none focus:ring-2 focus:ring-purple-400/50 min-h-[80px] resize-y text-sm italic opacity-85"
                           />
                         </div>
+                      ) : block.type === 'tool_use' ? (
+                        /* 工具调用编辑器：蓝色主题 + 等宽字体，编辑 JSON 格式的 input 参数 */
+                        <div className="rounded-lg border border-blue-300/30 dark:border-blue-500/20 bg-blue-50/30 dark:bg-blue-950/20 p-3">
+                          <div className="flex items-center gap-1 text-xs font-medium mb-2 text-blue-600 dark:text-blue-400">
+                            <Wrench className="w-4 h-4 shrink-0" /> 工具调用参数 (JSON)
+                          </div>
+                          <textarea
+                            value={block.text}
+                            onChange={(e) => {
+                              const next = [...editBlocks];
+                              next[blockIdx] = { ...block, text: e.target.value };
+                              setEditBlocks(next);
+                            }}
+                            className="w-full p-2 rounded bg-transparent text-foreground border border-blue-300/40 dark:border-blue-500/30 focus:outline-none focus:ring-2 focus:ring-blue-400/50 min-h-[80px] resize-y text-sm font-mono"
+                          />
+                        </div>
+                      ) : block.type === 'tool_result' ? (
+                        /* 工具结果编辑器：绿色主题，编辑工具返回的文本内容 */
+                        <div className="rounded-lg border border-emerald-300/30 dark:border-emerald-500/20 bg-emerald-50/30 dark:bg-emerald-950/20 p-3">
+                          <div className="flex items-center gap-1 text-xs font-medium mb-2 text-emerald-600 dark:text-emerald-400">
+                            <Wrench className="w-4 h-4 shrink-0" /> 工具结果
+                          </div>
+                          <textarea
+                            value={block.text}
+                            onChange={(e) => {
+                              const next = [...editBlocks];
+                              next[blockIdx] = { ...block, text: e.target.value };
+                              setEditBlocks(next);
+                            }}
+                            className="w-full p-2 rounded bg-transparent text-foreground border border-emerald-300/40 dark:border-emerald-500/30 focus:outline-none focus:ring-2 focus:ring-emerald-400/50 min-h-[80px] resize-y text-sm font-mono"
+                          />
+                        </div>
                       ) : (
                         /* 文本块编辑器：普通样式 */
                         <textarea
@@ -758,11 +822,17 @@ export function ChatView({
                       )}
                     </div>
                   ))}
-                  {/* 只读展示不可编辑的内容块（tool_use/tool_result/image 等） */}
-                  {msg.content.some(b => b.type !== 'text' && b.type !== 'thinking') && (
+                  {/* 只读展示不可编辑的内容块（仅 image 等无法文本编辑的类型） */}
+                  {msg.content.some(b =>
+                    b.type !== 'text' && b.type !== 'thinking' &&
+                    b.type !== 'tool_use' && b.type !== 'tool_result'
+                  ) && (
                     <div className="prose prose-sm dark:prose-invert max-w-none opacity-60">
                       {msg.content
-                        .filter(b => b.type !== 'text' && b.type !== 'thinking')
+                        .filter(b =>
+                          b.type !== 'text' && b.type !== 'thinking' &&
+                          b.type !== 'tool_use' && b.type !== 'tool_result'
+                        )
                         .map((block, idx) => (
                           <MessageContentRenderer
                             key={idx}

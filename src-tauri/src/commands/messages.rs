@@ -244,7 +244,23 @@ pub async fn edit_message_content(
                                                 );
                                             }
                                         }
-                                        // 其他类型块（如 tool_use/tool_result）：
+                                        // tool_use 块：将编辑文本解析为 JSON 并更新 input 字段
+                                        // 前端传入的 text 是 JSON.stringify 后的字符串
+                                        "tool_use" => {
+                                            if let Ok(parsed) =
+                                                serde_json::from_str::<Value>(&edit.text)
+                                            {
+                                                block.insert("input".to_string(), parsed);
+                                            }
+                                        }
+                                        // tool_result 块：更新 content 字段为纯文本
+                                        "tool_result" => {
+                                            block.insert(
+                                                "content".to_string(),
+                                                Value::String(edit.text.clone()),
+                                            );
+                                        }
+                                        // 其他类型块：
                                         // 尝试更新 text 字段（如果存在的话）
                                         _ => {
                                             if block.contains_key("text") {
