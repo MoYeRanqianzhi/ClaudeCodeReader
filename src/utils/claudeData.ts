@@ -311,25 +311,39 @@ export async function deleteMessages(sessionFilePath: string, messageUuids: Set<
 }
 
 /**
- * 编辑指定消息的文本内容
+ * 单个内容块的编辑数据
  *
- * 通过 Rust 后端在单次 IPC 调用中完成：读取文件 → 修改消息 → 写入文件。
- * Rust 后端会智能保持原始 content 字段的格式（字符串 vs 数组）。
+ * 描述对消息 content 数组中某个内容块的文本修改：
+ * - index：内容块在数组中的位置
+ * - text：用户编辑后的新文本
+ */
+export interface BlockEdit {
+  /** 内容块在 message.content 数组中的索引位置 */
+  index: number;
+  /** 用户编辑后的新文本内容 */
+  text: string;
+}
+
+/**
+ * 按内容块索引编辑指定消息
+ *
+ * 通过 Rust 后端在单次 IPC 调用中完成：读取文件 → 按块索引修改 → 写入文件。
+ * 每个内容块的 type 和其他元数据保持不变，仅更新对应的文本字段。
  *
  * @param sessionFilePath - 会话 JSONL 文件的绝对路径
  * @param messageUuid - 要编辑的消息的 UUID
- * @param newContent - 新的文本内容
+ * @param blockEdits - 按块索引的编辑列表
  * @returns 返回更新后的完整消息列表
  */
 export async function editMessageContent(
   sessionFilePath: string,
   messageUuid: string,
-  newContent: string
+  blockEdits: BlockEdit[]
 ): Promise<SessionMessage[]> {
   return invoke<SessionMessage[]>('edit_message_content', {
     sessionFilePath,
     messageUuid,
-    newContent,
+    blockEdits,
   });
 }
 

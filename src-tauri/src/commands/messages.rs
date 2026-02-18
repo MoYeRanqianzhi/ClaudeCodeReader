@@ -141,22 +141,34 @@ pub async fn delete_messages(
     Ok(filtered)
 }
 
-/// 编辑指定消息的文本内容
+/// 单个内容块的编辑数据
 ///
-/// 根据消息 UUID 定位目标消息，更新其文本内容并保存。
-/// 此函数会智能保持原始 `message.content` 字段的格式（字符串 vs 数组），
-/// 以确保编辑后的消息仍然能被 Claude Code 正确解析。
+/// 前端按块编辑时，每个被修改的内容块通过此结构体描述：
+/// - `index`：内容块在 `message.content` 数组中的位置索引
+/// - `text`：用户编辑后的新文本内容
 ///
-/// ## content 格式保持逻辑
-/// - 如果原始 content 是字符串格式：直接用新文本替换
-/// - 如果原始 content 是 `MessageContent[]` 数组格式：
-///   - 找到所有 `type='text'` 的内容块，将其 `text` 字段更新为新内容
-///   - 如果数组中没有 text 类型的内容块，则创建一个新的 text 块
+/// 后端根据索引定位到原始内容块，仅更新其文本字段，
+/// 保留内容块的 `type` 和其他所有字段不变。
+#[derive(serde::Deserialize)]
+pub struct BlockEdit {
+    /// 内容块在 message.content 数组中的索引位置
+    pub index: usize,
+    /// 用户编辑后的新文本内容
+    pub text: String,
+}
+
+/// 编辑指定消息的内容块
+///
+/// 根据消息 UUID 定位目标消息，按内容块索引逐个更新文本字段。
+/// 每个内容块的 `type` 和其他元数据字段保持不变，仅修改文本：
+/// - `text` 类型块：更新 `text` 字段
+/// - `thinking` 类型块：更新 `thinking` 字段（若不存在则更新 `text` 字段）
+/// - 字符串格式 content：整体替换为第一个编辑项的文本
 ///
 /// # 参数
 /// - `session_file_path` - 会话 JSONL 文件的绝对路径
 /// - `message_uuid` - 要编辑的消息的 UUID
-/// - `new_content` - 新的文本内容
+/// - `block_edits` - 按块索引的编辑列表，每项包含 (index, text)
 /// - `cache` - Tauri managed state，内存缓存
 ///
 /// # 返回值
@@ -168,7 +180,7 @@ pub async fn delete_messages(
 pub async fn edit_message_content(
     session_file_path: String,
     message_uuid: String,
-    new_content: String,
+    block_edits: Vec<BlockEdit>,
     cache: State<'_, AppCache>,
 ) -> Result<Vec<SessionMessage>, String> {
     let messages = parser::read_messages(&session_file_path).await?;
@@ -191,42 +203,59 @@ pub async fn edit_message_content(
             if let Some(message) = msg.get_mut("message") {
                 if let Some(content) = message.get_mut("content") {
                     match content {
-                        // 字符串格式：直接替换为新文本
+                        // 字符串格式：使用第一个编辑项的文本直接替换
                         Value::String(_) => {
-                            *content = Value::String(new_content.clone());
+                            if let Some(first_edit) = block_edits.first() {
+                                *content = Value::String(first_edit.text.clone());
+                            }
                         }
-                        // 数组格式：更新所有 text 类型内容块的 text 字段
+                        // 数组格式：按索引逐个更新对应内容块的文本字段
                         Value::Array(arr) => {
-                            let has_text = arr.iter().any(|item| {
-                                item.get("type")
-                                    .and_then(|t| t.as_str())
-                                    .map(|t| t == "text")
-                                    .unwrap_or(false)
-                            });
-
-                            if has_text {
-                                // 更新所有 text 类型内容块
-                                for item in arr.iter_mut() {
-                                    if item
+                            for edit in &block_edits {
+                                if edit.index >= arr.len() {
+                                    continue;
+                                }
+                                if let Some(block) = arr[edit.index].as_object_mut() {
+                                    let block_type = block
                                         .get("type")
                                         .and_then(|t| t.as_str())
-                                        .map(|t| t == "text")
-                                        .unwrap_or(false)
-                                    {
-                                        if let Some(obj) = item.as_object_mut() {
-                                            obj.insert(
+                                        .unwrap_or("");
+
+                                    match block_type {
+                                        // text 块：更新 text 字段
+                                        "text" => {
+                                            block.insert(
                                                 "text".to_string(),
-                                                Value::String(new_content.clone()),
+                                                Value::String(edit.text.clone()),
                                             );
+                                        }
+                                        // thinking 块：优先更新 thinking 字段，
+                                        // 若不存在则更新 text 字段
+                                        "thinking" => {
+                                            if block.contains_key("thinking") {
+                                                block.insert(
+                                                    "thinking".to_string(),
+                                                    Value::String(edit.text.clone()),
+                                                );
+                                            } else {
+                                                block.insert(
+                                                    "text".to_string(),
+                                                    Value::String(edit.text.clone()),
+                                                );
+                                            }
+                                        }
+                                        // 其他类型块（如 tool_use/tool_result）：
+                                        // 尝试更新 text 字段（如果存在的话）
+                                        _ => {
+                                            if block.contains_key("text") {
+                                                block.insert(
+                                                    "text".to_string(),
+                                                    Value::String(edit.text.clone()),
+                                                );
+                                            }
                                         }
                                     }
                                 }
-                            } else {
-                                // 数组中没有 text 块时，创建一个新的
-                                *content = Value::Array(vec![serde_json::json!({
-                                    "type": "text",
-                                    "text": new_content.clone()
-                                })]);
                             }
                         }
                         _ => {}

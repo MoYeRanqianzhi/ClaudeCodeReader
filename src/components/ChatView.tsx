@@ -12,11 +12,12 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   ChevronRight, Search, X, CheckSquare, Square, Filter,
   Download, FileText, FileJson, RefreshCw, ArrowDown,
-  Copy, Edit2, Trash2, MessageSquare, Bot, User
+  Copy, Edit2, Trash2, MessageSquare, Bot, User, Lightbulb
 } from 'lucide-react';
 import type { SessionMessage, Session } from '../types/claude';
 import { getMessageText, formatTimestamp } from '../utils/claudeData';
 import { MessageBlockList } from './MessageBlockList';
+import { MessageContentRenderer } from './MessageContentRenderer';
 
 /**
  * ChatView 组件的属性接口
@@ -26,8 +27,8 @@ interface ChatViewProps {
   session: Session | null;
   /** 当前会话中的所有消息列表 */
   messages: SessionMessage[];
-  /** 编辑消息的回调函数，接收消息 UUID 和修改后的内容 */
-  onEditMessage: (uuid: string, newContent: string) => void;
+  /** 编辑消息的回调函数，接收消息 UUID 和按块索引的编辑列表 */
+  onEditMessage: (uuid: string, blockEdits: { index: number; text: string }[]) => void;
   /** 删除消息的回调函数，接收待删除消息的 UUID */
   onDeleteMessage: (uuid: string) => void;
   /** 刷新当前会话数据的回调函数 */
@@ -90,8 +91,12 @@ export function ChatView({
 }: ChatViewProps) {
   /** 当前正在编辑的消息 UUID，为 null 表示没有消息处于编辑状态 */
   const [editingId, setEditingId] = useState<string | null>(null);
-  /** 编辑模式下消息内容的临时存储，保存用户正在修改的文本 */
-  const [editContent, setEditContent] = useState('');
+  /**
+   * 编辑模式下各内容块的临时状态。
+   * 每个条目记录了原始索引、块类型和用户正在修改的文本内容。
+   * 仅包含可编辑的块（text 和 thinking），tool_use/tool_result/image 以只读方式展示。
+   */
+  const [editBlocks, setEditBlocks] = useState<{ index: number; type: string; text: string }[]>([]);
   /** 消息过滤器状态：'all' 显示全部，'user' 仅显示用户消息，'assistant' 仅显示助手消息 */
   const [filter, setFilter] = useState<'all' | 'user' | 'assistant'>('all');
   /** 搜索关键词：用于在消息文本中查找匹配内容，空字符串表示不搜索 */
@@ -202,24 +207,51 @@ export function ChatView({
 
   /**
    * 开始编辑指定消息。
-   * 将消息的 UUID 设为当前编辑目标，并将消息文本填充到编辑区域。
+   * 提取消息中所有可编辑内容块（text 和 thinking）的文本，
+   * 按原始索引存储到 editBlocks 状态中。
    *
    * @param msg - 要编辑的消息对象
    */
   const handleStartEdit = (msg: SessionMessage) => {
     setEditingId(msg.uuid);
-    setEditContent(getMessageText(msg));
+
+    const content = msg.message?.content;
+    if (typeof content === 'string') {
+      // 字符串格式：作为单个 text 块处理
+      setEditBlocks([{ index: 0, type: 'text', text: content }]);
+    } else if (Array.isArray(content)) {
+      // 数组格式：提取所有可编辑块（text 和 thinking）
+      const blocks: { index: number; type: string; text: string }[] = [];
+      content.forEach((block, idx) => {
+        if (block.type === 'text') {
+          blocks.push({ index: idx, type: 'text', text: block.text || '' });
+        } else if (block.type === 'thinking') {
+          blocks.push({ index: idx, type: 'thinking', text: block.thinking || block.text || '' });
+        }
+      });
+      // 如果没有可编辑块，创建一个空的 text 块
+      if (blocks.length === 0) {
+        blocks.push({ index: -1, type: 'text', text: '' });
+      }
+      setEditBlocks(blocks);
+    } else {
+      setEditBlocks([{ index: 0, type: 'text', text: '' }]);
+    }
   };
 
   /**
    * 保存编辑后的消息内容。
-   * 调用父组件的 onEditMessage 回调将修改持久化，然后退出编辑模式。
+   * 将 editBlocks 中的修改通过 onEditMessage 回调持久化，然后退出编辑模式。
    */
   const handleSaveEdit = () => {
     if (editingId) {
-      onEditMessage(editingId, editContent);
+      // 过滤掉新建的块（index === -1 且内容为空）
+      const blockEdits = editBlocks
+        .filter(b => b.index >= 0)
+        .map(b => ({ index: b.index, text: b.text }));
+      onEditMessage(editingId, blockEdits);
       setEditingId(null);
-      setEditContent('');
+      setEditBlocks([]);
     }
   };
 
@@ -229,7 +261,7 @@ export function ChatView({
    */
   const handleCancelEdit = () => {
     setEditingId(null);
-    setEditContent('');
+    setEditBlocks([]);
   };
 
   /**
@@ -645,13 +677,51 @@ export function ChatView({
 
               {/* 消息内容：根据是否处于编辑模式显示不同的 UI */}
               {editingId === msg.uuid ? (
-                /* 编辑模式：显示可编辑的文本域和保存/取消按钮 */
+                /* 编辑模式：按内容块类型分别显示对应样式的编辑器 */
                 <div className="space-y-2">
-                  <textarea
-                    value={editContent}
-                    onChange={(e) => setEditContent(e.target.value)}
-                    className="w-full p-3 rounded-lg bg-background text-foreground border border-border focus:outline-none focus:ring-2 focus:ring-ring min-h-[100px] resize-y"
-                  />
+                  {editBlocks.map((block, blockIdx) => (
+                    <div key={blockIdx}>
+                      {block.type === 'thinking' ? (
+                        /* 思考块编辑器：保持紫色虚线左边框 + 淡紫色背景的原始样式 */
+                        <div className="thinking-block">
+                          <div className="flex items-center gap-1 text-xs font-medium mb-2 opacity-70">
+                            <Lightbulb className="w-4 h-4 shrink-0" /> 思考过程
+                          </div>
+                          <textarea
+                            value={block.text}
+                            onChange={(e) => {
+                              const next = [...editBlocks];
+                              next[blockIdx] = { ...block, text: e.target.value };
+                              setEditBlocks(next);
+                            }}
+                            className="w-full p-2 rounded bg-transparent text-foreground border border-purple-300/40 dark:border-purple-500/30 focus:outline-none focus:ring-2 focus:ring-purple-400/50 min-h-[80px] resize-y text-sm italic opacity-85"
+                          />
+                        </div>
+                      ) : (
+                        /* 文本块编辑器：普通样式 */
+                        <textarea
+                          value={block.text}
+                          onChange={(e) => {
+                            const next = [...editBlocks];
+                            next[blockIdx] = { ...block, text: e.target.value };
+                            setEditBlocks(next);
+                          }}
+                          className="w-full p-3 rounded-lg bg-background text-foreground border border-border focus:outline-none focus:ring-2 focus:ring-ring min-h-[100px] resize-y"
+                        />
+                      )}
+                    </div>
+                  ))}
+                  {/* 只读展示不可编辑的内容块（tool_use/tool_result/image 等） */}
+                  {Array.isArray(msg.message?.content) &&
+                    msg.message.content.some((b: { type: string }) => b.type !== 'text' && b.type !== 'thinking') && (
+                      <div className="prose prose-sm dark:prose-invert max-w-none opacity-60">
+                        {msg.message.content
+                          .filter((b: { type: string }) => b.type !== 'text' && b.type !== 'thinking')
+                          .map((block: any, idx: number) => (
+                            <MessageContentRenderer key={idx} block={block} />
+                          ))}
+                      </div>
+                    )}
                   <div className="flex justify-end gap-2">
                     <button
                       onClick={handleCancelEdit}

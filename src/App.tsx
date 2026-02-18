@@ -247,20 +247,20 @@ function App() {
   /**
    * 处理消息编辑事件
    *
-   * 将指定消息的文本内容更新为新内容，并保存到文件。
-   * 编辑操作会保持消息 content 字段的原有格式（字符串或数组）。
+   * 按内容块索引将编辑后的文本更新到消息中，并保存到文件。
+   * 每个内容块的类型（text/thinking/tool_use 等）保持不变，仅更新文本字段。
    *
    * @param uuid - 要编辑的消息的 UUID
-   * @param newContent - 新的文本内容
+   * @param blockEdits - 按块索引的编辑列表
    */
   const handleEditMessage = useCallback(
-    async (uuid: string, newContent: string) => {
+    async (uuid: string, blockEdits: { index: number; text: string }[]) => {
       if (!currentSession) return;
       try {
         const updatedMessages = await editMessageContent(
           currentSession.filePath,
           uuid,
-          newContent
+          blockEdits
         );
         setMessages(updatedMessages);
       } catch (err) {
