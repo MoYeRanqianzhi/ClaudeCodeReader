@@ -105,7 +105,7 @@ fn main() {
 | 字段 | 值 | 说明 |
 |------|------|------|
 | `name` | `claude-code-reader` | Cargo 包名称 |
-| `version` | `1.0.1-rc.2` | 当前版本号 |
+| `version` | `1.1.0-rc.1` | 当前版本号 |
 | `edition` | `2021` | Rust 版本 (Edition) |
 | `rust-version` | `1.77.2` | 最低 Rust 工具链版本要求 |
 | `license` | `MIT` | 开源许可证 |
@@ -179,7 +179,7 @@ if cfg!(debug_assertions) {
 ```json
 {
   "productName": "ClaudeCodeReader",
-  "version": "1.0.1-rc.2",
+  "version": "1.1.0-rc.1",
   "identifier": "com.claudecodereader.app"
 }
 ```
