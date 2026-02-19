@@ -7,19 +7,23 @@
  * - 默认显示为一行紧凑格式：**Tool**(**args**)
  * - Write 工具：展示写入内容（绿色，表示新增）
  * - Edit 工具：展示替换内容（红色=删除，绿色=新增）
- * - 超过 5 行自动折叠，可展开查看全部
- * - "Raw" 按钮切换查看原始 JSON 参数
+ * - 超过 5 行自动折叠，可展开查看全部（带平滑动画）
+ * - "Raw" 按钮切换查看原始 JSON 参数（展开/收起都有动画）
+ * - 收起时自动滚动定位，避免用户丢失上下文
  * - 路径参数自动简化为相对路径（如果在项目目录内）
  */
 
-import { useState, useMemo } from 'react';
-import { motion } from 'motion/react';
+import { useState, useMemo, useRef } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { Wrench, Code, ChevronDown, ChevronUp } from 'lucide-react';
 import type { MessageContent } from '../types/claude';
 import { formatToolArgs } from '../utils/toolFormatter';
 
 /** 折叠阈值：diff 内容超过此行数时默认折叠 */
 const COLLAPSE_LINE_THRESHOLD = 5;
+
+/** 展开/收起动画的过渡参数 */
+const EXPAND_TRANSITION = { duration: 0.25, ease: 'easeInOut' as const };
 
 /**
  * ToolUseRenderer 组件的属性接口
@@ -95,6 +99,34 @@ function truncateDiff(
 }
 
 /**
+ * 渲染 diff 行列表（红色删除行 + 绿色新增行）
+ */
+function DiffLines({ removed, added }: { removed: string[]; added: string[] }) {
+  return (
+    <>
+      {removed.map((line, i) => (
+        <div
+          key={`r-${i}`}
+          className="px-2 py-px bg-red-500/10 text-red-700 dark:text-red-400 whitespace-pre-wrap break-all"
+        >
+          <span className="select-none opacity-50 mr-1">-</span>
+          {line}
+        </div>
+      ))}
+      {added.map((line, i) => (
+        <div
+          key={`a-${i}`}
+          className="px-2 py-px bg-green-500/10 text-green-700 dark:text-green-400 whitespace-pre-wrap break-all"
+        >
+          <span className="select-none opacity-50 mr-1">+</span>
+          {line}
+        </div>
+      ))}
+    </>
+  );
+}
+
+/**
  * ToolUseRenderer - 工具调用块的紧凑渲染器
  *
  * 将复杂的工具调用 JSON 参数提炼为一行易读的格式：
@@ -113,6 +145,8 @@ export function ToolUseRenderer({ block, projectPath }: ToolUseRendererProps) {
   const [showRaw, setShowRaw] = useState(false);
   /** 控制 diff 内容的展开/收起状态 */
   const [expanded, setExpanded] = useState(false);
+  /** 组件根元素引用，用于收起时滚动定位 */
+  const containerRef = useRef<HTMLDivElement>(null);
 
   const toolName = block.name || '未知工具';
   const input = (block.input || {}) as Record<string, unknown>;
@@ -126,17 +160,31 @@ export function ToolUseRenderer({ block, projectPath }: ToolUseRendererProps) {
 
   const shouldCollapse = diffData !== null && diffData.totalLines > COLLAPSE_LINE_THRESHOLD;
 
-  // 计算实际显示的 diff 行（折叠时截断）
-  const displayDiff = useMemo(() => {
+  // 折叠状态下始终显示的行（前 N 行）
+  const collapsedDiff = useMemo(() => {
     if (!diffData) return null;
-    if (!shouldCollapse || expanded) {
-      return { removed: diffData.removed, added: diffData.added };
-    }
+    if (!shouldCollapse) return { removed: diffData.removed, added: diffData.added };
     return truncateDiff(diffData, COLLAPSE_LINE_THRESHOLD);
-  }, [diffData, shouldCollapse, expanded]);
+  }, [diffData, shouldCollapse]);
+
+  // 展开时额外显示的行（超出阈值的部分）
+  const extraDiff = useMemo(() => {
+    if (!diffData || !shouldCollapse) return null;
+    const collapsed = truncateDiff(diffData, COLLAPSE_LINE_THRESHOLD);
+    return {
+      removed: diffData.removed.slice(collapsed.removed.length),
+      added: diffData.added.slice(collapsed.added.length),
+    };
+  }, [diffData, shouldCollapse]);
+
+  /** 收起后动画完成时，滚动确保组件可见 */
+  const handleCollapseComplete = () => {
+    containerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  };
 
   return (
     <motion.div
+      ref={containerRef}
       className="tool-use-block"
       initial={{ opacity: 0, scale: 0.98 }}
       animate={{ opacity: 1, scale: 1 }}
@@ -173,28 +221,27 @@ export function ToolUseRenderer({ block, projectPath }: ToolUseRendererProps) {
       </div>
 
       {/* Write/Edit 工具的 diff 内容展示 */}
-      {displayDiff && (
+      {collapsedDiff && (
         <div className="mt-2 rounded-md border border-border/50 overflow-hidden text-xs font-mono">
-          {/* 删除行（红色） */}
-          {displayDiff.removed.map((line, i) => (
-            <div
-              key={`r-${i}`}
-              className="px-2 py-px bg-red-500/10 text-red-700 dark:text-red-400 whitespace-pre-wrap break-all"
-            >
-              <span className="select-none opacity-50 mr-1">-</span>
-              {line}
-            </div>
-          ))}
-          {/* 新增行（绿色） */}
-          {displayDiff.added.map((line, i) => (
-            <div
-              key={`a-${i}`}
-              className="px-2 py-px bg-green-500/10 text-green-700 dark:text-green-400 whitespace-pre-wrap break-all"
-            >
-              <span className="select-none opacity-50 mr-1">+</span>
-              {line}
-            </div>
-          ))}
+          {/* 始终可见的折叠行 */}
+          <DiffLines removed={collapsedDiff.removed} added={collapsedDiff.added} />
+
+          {/* 额外行：展开时以动画滑入，收起时以动画滑出 */}
+          <AnimatePresence initial={false} onExitComplete={handleCollapseComplete}>
+            {expanded && extraDiff && (
+              <motion.div
+                key="extra-diff"
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: 'auto', opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                transition={EXPAND_TRANSITION}
+                style={{ overflow: 'hidden' }}
+              >
+                <DiffLines removed={extraDiff.removed} added={extraDiff.added} />
+              </motion.div>
+            )}
+          </AnimatePresence>
+
           {/* 折叠/展开按钮 */}
           {shouldCollapse && (
             <button
@@ -217,17 +264,23 @@ export function ToolUseRenderer({ block, projectPath }: ToolUseRendererProps) {
         </div>
       )}
 
-      {/* 原始 JSON 参数面板（可折叠） */}
-      {showRaw && (
-        <motion.pre
-          className="code-block mt-2 text-xs overflow-x-auto custom-scrollbar"
-          initial={{ opacity: 0, height: 0 }}
-          animate={{ opacity: 1, height: 'auto' }}
-          transition={{ duration: 0.15 }}
-        >
-          {JSON.stringify(input, null, 2)}
-        </motion.pre>
-      )}
+      {/* 原始 JSON 参数面板（展开/收起都有动画） */}
+      <AnimatePresence initial={false}>
+        {showRaw && (
+          <motion.div
+            key="raw-panel"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={EXPAND_TRANSITION}
+            style={{ overflow: 'hidden' }}
+          >
+            <pre className="code-block mt-2 text-xs overflow-x-auto custom-scrollbar">
+              {JSON.stringify(input, null, 2)}
+            </pre>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </motion.div>
   );
 }
