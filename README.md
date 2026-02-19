@@ -12,6 +12,8 @@
 
 A desktop app for viewing and managing Claude Code sessions and settings.
 
+> Note: This project is currently under reconstruction, and there will be major updates to performance, and it will enter the 2.x.x version.
+
 ## Install
 
 ### NPM (Recommended)
