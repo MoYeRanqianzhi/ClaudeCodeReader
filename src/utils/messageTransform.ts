@@ -84,15 +84,18 @@ export function transformForDisplay(messages: SessionMessage[]): {
 
     // user 消息：需要拆分 tool_result 块
     if (typeof content === 'string') {
-      // 纯字符串 content，作为普通用户消息
+      // 判断是否为自动压缩摘要消息（isCompactSummary 字段由 Claude Code 自动标记）
+      const isCompact = Boolean(msg.isCompactSummary);
+
+      // 纯字符串 content，作为普通用户消息或压缩摘要
       displayMessages.push({
         sourceUuid: msg.uuid,
         displayId: msg.uuid,
-        displayType: 'user',
+        displayType: isCompact ? 'compact_summary' : 'user',
         timestamp: msg.timestamp,
         content: [{ type: 'text', text: content }],
         rawMessage: msg,
-        editable: true,
+        editable: !isCompact,
         blockIndexMap: [0],
       });
       continue;

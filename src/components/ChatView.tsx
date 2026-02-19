@@ -12,7 +12,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   ChevronRight, Search, X, CheckSquare, Square, Filter,
   Download, FileText, FileJson, RefreshCw, ArrowDown,
-  Copy, Edit2, Trash2, MessageSquare, Bot, User, Lightbulb, Wrench
+  Copy, Edit2, Trash2, MessageSquare, Bot, User, Lightbulb, Wrench, Archive
 } from 'lucide-react';
 import type { SessionMessage, Session, DisplayMessage } from '../types/claude';
 import { getMessageText, formatTimestamp } from '../utils/claudeData';
@@ -662,7 +662,9 @@ export function ChatView({
                   ? 'bg-primary/5 border border-primary/10'
                   : msg.displayType === 'tool_result'
                     ? 'bg-emerald-500/5 border border-emerald-500/10'
-                    : 'bg-muted/50 border border-border'
+                    : msg.displayType === 'compact_summary'
+                      ? 'bg-amber-500/5 border border-amber-500/10'
+                      : 'bg-muted/50 border border-border'
               } ${selectionMode && selectedMessages.has(msg.sourceUuid) ? 'ring-2 ring-primary' : ''}`}
               onClick={selectionMode ? () => onToggleSelect(msg.sourceUuid) : undefined}
               style={selectionMode ? { cursor: 'pointer' } : undefined}
@@ -686,24 +688,34 @@ export function ChatView({
                       )}
                     </button>
                   )}
-                  {/* 角色徽章：根据 displayType 区分用户/助手/工具结果 */}
+                  {/* 角色徽章：根据 displayType 区分用户/助手/工具结果/压缩摘要 */}
                   <span
                     className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium ${
                       msg.displayType === 'user'
                         ? 'bg-primary text-primary-foreground'
                         : msg.displayType === 'tool_result'
                           ? 'bg-emerald-600 text-white'
-                          : 'bg-secondary text-secondary-foreground'
+                          : msg.displayType === 'compact_summary'
+                            ? 'bg-amber-500 text-white'
+                            : 'bg-secondary text-secondary-foreground'
                     }`}
                   >
                     {msg.displayType === 'user' ? (
                       <User className="w-3 h-3" />
                     ) : msg.displayType === 'tool_result' ? (
                       <Wrench className="w-3 h-3" />
+                    ) : msg.displayType === 'compact_summary' ? (
+                      <Archive className="w-3 h-3" />
                     ) : (
                       <Bot className="w-3 h-3" />
                     )}
-                    {msg.displayType === 'user' ? '用户' : msg.displayType === 'tool_result' ? '工具结果' : '助手'}
+                    {msg.displayType === 'user'
+                      ? '用户'
+                      : msg.displayType === 'tool_result'
+                        ? '工具结果'
+                        : msg.displayType === 'compact_summary'
+                          ? '压缩'
+                          : '助手'}
                   </span>
                   {/* 消息时间戳 */}
                   <span className="text-xs text-muted-foreground">
@@ -729,7 +741,8 @@ export function ChatView({
                     >
                       <Copy className="w-4 h-4" />
                     </motion.button>
-                    {/* 编辑按钮 */}
+                    {/* 编辑按钮：仅对可编辑消息显示 */}
+                    {msg.editable && (
                     <motion.button
                       onClick={() => handleStartEdit(msg)}
                       className="p-1.5 rounded hover:bg-accent transition-colors"
@@ -739,6 +752,7 @@ export function ChatView({
                     >
                       <Edit2 className="w-4 h-4" />
                     </motion.button>
+                    )}
                     {/* 删除按钮：使用 sourceUuid 删除原始消息 */}
                     <motion.button
                       onClick={() => onDeleteMessage(msg.sourceUuid)}

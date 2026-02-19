@@ -199,6 +199,15 @@ export interface SessionMessage {
   };
   /** 待办事项列表：AI 助手在回复中创建的任务清单 */
   todos?: Todo[];
+  /**
+   * 是否为压缩摘要消息。
+   * 当 Claude Code 会话上下文超出限制时，会自动触发压缩（compact），
+   * 将之前的对话历史浓缩为一条摘要消息插入到新上下文中。
+   * 这类消息的 content 通常以
+   * "This session is being continued from a previous conversation that ran out of context."
+   * 开头。仅在自动压缩生成的消息上为 true，普通用户消息不包含此字段。
+   */
+  isCompactSummary?: boolean;
 }
 
 /**
@@ -416,8 +425,9 @@ export interface DisplayMessage {
    * - 'user'：用户消息（蓝色调）
    * - 'assistant'：助手消息（灰色调）
    * - 'tool_result'：工具结果（绿色调，从 user 消息中拆分而来）
+   * - 'compact_summary'：压缩摘要（橙色调，自动压缩生成的上下文续接消息）
    */
-  displayType: 'user' | 'assistant' | 'tool_result';
+  displayType: 'user' | 'assistant' | 'tool_result' | 'compact_summary';
   /** 时间戳：继承自原始消息的 ISO 8601 时间字符串 */
   timestamp: string;
   /** 内容块列表：仅包含属于该 DisplayMessage 的内容块 */
