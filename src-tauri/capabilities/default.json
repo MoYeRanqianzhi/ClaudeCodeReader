@@ -17,6 +17,7 @@
     "fs:allow-home-read-recursive",
     "fs:allow-home-write-recursive",
     "dialog:default",
-    "shell:default"
+    "shell:default",
+    "opener:default"
   ]
 }

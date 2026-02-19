@@ -51,6 +51,9 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         // Shell 插件：允许前端调用系统命令、打开外部链接等 Shell 操作
         .plugin(tauri_plugin_shell::init())
+        // Opener 插件：在系统文件管理器中定位文件
+        // 使用 OS 原生 API，避免手动拼接 shell 命令
+        .plugin(tauri_plugin_opener::init())
         // === 应用全局状态初始化 ===
         // 注册 AppCache 为 Tauri managed state，所有 command 函数可通过
         // `State<AppCache>` 参数注入访问。AppCache 包含：
@@ -77,7 +80,6 @@ pub fn run() {
             commands::messages::delete_session,
             // 文件系统辅助 commands
             commands::settings::check_file_exists,
-            commands::settings::open_in_explorer,
         ])
         // `setup` 闭包：在应用窗口创建之前执行的初始化钩子
         .setup(|app| {

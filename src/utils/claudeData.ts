@@ -435,13 +435,18 @@ export async function checkFileExists(filePath: string): Promise<boolean> {
 /**
  * 在系统文件管理器中打开指定文件所在的目录
  *
- * 通过 Rust 后端调用系统命令打开文件管理器并选中目标文件。
- * Windows 使用 explorer，macOS 使用 Finder，Linux 使用 xdg-open。
+ * 通过 Tauri 官方 opener 插件调用 OS 原生 API 定位文件：
+ * - Windows: Shell COM API (SHOpenFolderAndSelectItems)
+ * - macOS: NSWorkspace selectFile
+ * - Linux: D-Bus org.freedesktop.FileManager1
+ *
+ * 相比手动拼接 explorer/open/xdg-open 命令，无参数注入风险，无跨平台兼容性问题。
  *
  * @param filePath - 要在文件管理器中打开的文件绝对路径
  */
 export async function openInExplorer(filePath: string): Promise<void> {
-  return invoke<void>('open_in_explorer', { filePath });
+  const { revealItemInDir } = await import('@tauri-apps/plugin-opener');
+  return revealItemInDir(filePath);
 }
 
 /**

@@ -24,7 +24,10 @@ tauri-plugin-log = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-shell = "2"
+# 文件管理器集成：使用 OS 原生 API 在文件管理器中定位文件
+# Windows 用 Shell COM API，macOS 用 NSWorkspace，Linux 用 D-Bus
+tauri-plugin-opener = "2"
 # 异步文件 I/O：利用 Tauri 自带的 tokio runtime 进行并行文件扫描
-tokio = { version = "1", features = ["fs", "rt", "process"] }
+tokio = { version = "1", features = ["fs", "rt"] }
 # 跨平台主目录获取：用于定位 ~/.claude/ 和 ~/.mo/CCR/ 目录
 dirs = "6"

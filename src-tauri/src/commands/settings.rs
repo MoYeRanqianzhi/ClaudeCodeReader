@@ -5,6 +5,10 @@
 //! - `read_settings` / `save_settings` - 读写 Claude Code 的 settings.json
 //! - `read_env_config` / `save_env_config` - 读写 CCR 环境切换器配置
 //! - `read_history` - 读取命令历史记录
+//! - `check_file_exists` - 检查文件是否存在
+//!
+//! 注意：文件管理器定位功能（原 `open_in_explorer`）已迁移到 `tauri-plugin-opener`，
+//! 使用 OS 原生 API 替代手动拼接 shell 命令。
 
 use std::path::Path;
 
@@ -203,59 +207,4 @@ pub async fn read_history(claude_path: String) -> Result<Vec<HistoryEntry>, Stri
 #[tauri::command]
 pub async fn check_file_exists(file_path: String) -> bool {
     std::path::Path::new(&file_path).exists()
-}
-
-/// 在系统文件管理器中打开指定文件所在的目录并选中该文件
-///
-/// 根据运行平台选择对应的系统命令：
-/// - Windows: `explorer /select,"file_path"`
-/// - macOS: `open -R "file_path"`
-/// - Linux: `xdg-open "$(dirname file_path)"`
-///
-/// # 参数
-/// - `file_path` - 要在文件管理器中打开的文件绝对路径
-///
-/// # 错误
-/// 命令执行失败或文件不存在时返回错误信息
-#[tauri::command]
-pub async fn open_in_explorer(file_path: String) -> Result<(), String> {
-    let path = std::path::Path::new(&file_path);
-
-    // 检查文件是否存在
-    if !path.exists() {
-        return Err(format!("文件不存在: {}", file_path));
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        // 将 /select, 和路径合并为单个参数，避免 explorer 因中间空格而无法定位文件
-        // 正确格式: explorer /select,"C:\path\file.txt"
-        // 错误格式: explorer /select, "C:\path\file.txt"（空格导致 explorer 打开默认目录）
-        tokio::process::Command::new("explorer")
-            .arg(format!("/select,{}", file_path))
-            .spawn()
-            .map_err(|e| format!("打开文件管理器失败: {}", e))?;
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        tokio::process::Command::new("open")
-            .args(["-R", &file_path])
-            .spawn()
-            .map_err(|e| format!("打开 Finder 失败: {}", e))?;
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        let parent = path
-            .parent()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|| file_path.clone());
-        tokio::process::Command::new("xdg-open")
-            .arg(&parent)
-            .spawn()
-            .map_err(|e| format!("打开文件管理器失败: {}", e))?;
-    }
-
-    Ok(())
 }
