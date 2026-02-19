@@ -208,6 +208,18 @@ export interface SessionMessage {
    * 开头。仅在自动压缩生成的消息上为 true，普通用户消息不包含此字段。
    */
   isCompactSummary?: boolean;
+  /**
+   * 是否为元数据消息。
+   * Claude Code 在某些场景下会向对话注入元数据消息（如技能加载上下文、系统告示等），
+   * 这些消息的 type 仍为 'user'，但 isMeta 为 true。
+   */
+  isMeta?: boolean;
+  /**
+   * 调用者信息：标识该消息由哪个系统组件自动生成。
+   * 典型场景：user-prompt-submit-hook 等钩子函数触发的自动消息。
+   * 普通用户手动输入的消息不包含此字段。
+   */
+  caller?: unknown;
 }
 
 /**
@@ -422,18 +434,33 @@ export interface DisplayMessage {
   displayId: string;
   /**
    * 显示类型，决定消息气泡的视觉样式：
-   * - 'user'：用户消息（蓝色调）
+   * - 'user'：用户消息（蓝色调），包括斜杠命令（经过内容提取后显示）
    * - 'assistant'：助手消息（灰色调）
    * - 'tool_result'：工具结果（绿色调，从 user 消息中拆分而来）
-   * - 'compact_summary'：压缩摘要（橙色调，自动压缩生成的上下文续接消息）
+   * - 'compact_summary'：压缩摘要（青绿色调，自动压缩生成的上下文续接消息）
+   * - 'system'：系统消息（淡灰色调，CLI 自动注入的非用户消息，默认折叠）
    */
-  displayType: 'user' | 'assistant' | 'tool_result' | 'compact_summary';
+  displayType: 'user' | 'assistant' | 'tool_result' | 'compact_summary' | 'system';
   /** 时间戳：继承自原始消息的 ISO 8601 时间字符串 */
   timestamp: string;
   /** 内容块列表：仅包含属于该 DisplayMessage 的内容块 */
   content: MessageContent[];
   /** 原始消息引用：用于获取 model、usage、cwd 等元数据 */
   rawMessage: SessionMessage;
+  /**
+   * 系统消息子类型标签（仅 displayType === 'system' 时使用）。
+   * 用于在 SystemMessageBlock 中渲染更精细的分类标签和图标：
+   * - '技能'：isMeta 且以 "Base directory for this skill:" 开头的技能加载消息
+   * - '计划'：严格匹配 "Implement the following plan:" 格式的计划执行消息
+   * - '系统'：其余所有系统消息（命令输出、钩子、caller 等）
+   */
+  systemLabel?: string;
+  /**
+   * 计划消息引用的源会话 JSONL 文件路径（仅 systemLabel === '计划' 时有值）。
+   * 从 "read the full transcript at: <path>.jsonl" 中提取，
+   * 可进一步解析出 encodedProject 和 sessionId 用于会话跳转。
+   */
+  planSourcePath?: string;
   /** 是否可编辑 */
   editable: boolean;
   /**

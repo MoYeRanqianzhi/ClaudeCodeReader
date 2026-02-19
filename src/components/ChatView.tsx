@@ -11,12 +11,12 @@ import { useState, useRef, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   ChevronRight, ChevronDown, ChevronUp, Search, X, CheckSquare, Square, Filter,
-  Download, FileText, FileJson, RefreshCw, ArrowDown,
-  Copy, Edit2, Trash2, MessageSquare, Bot, User, Lightbulb, Wrench, Archive
+  Download, FileText, FileJson, RefreshCw, ArrowDown, ArrowLeft,
+  Copy, Edit2, Trash2, MessageSquare, Bot, User, Lightbulb, Wrench, Archive, Terminal, ExternalLink
 } from 'lucide-react';
-import type { SessionMessage, Session, DisplayMessage } from '../types/claude';
+import type { SessionMessage, Session, Project, DisplayMessage } from '../types/claude';
 import { getMessageText, formatTimestamp } from '../utils/claudeData';
-import { transformForDisplay } from '../utils/messageTransform';
+import { transformForDisplay, parseJsonlPath } from '../utils/messageTransform';
 import type { ToolUseInfo } from '../utils/messageTransform';
 import { MessageBlockList } from './MessageBlockList';
 import { MessageContentRenderer } from './MessageContentRenderer';
@@ -57,6 +57,14 @@ interface ChatViewProps {
   sidebarCollapsed: boolean;
   /** 展开侧边栏的回调 */
   onExpandSidebar: () => void;
+  /** 所有项目列表，用于计划消息跳转时查找目标会话 */
+  projects: Project[];
+  /** 导航回退目标：跳转到引用会话后，用于显示悬浮"返回"按钮 */
+  navBackTarget: { project: Project; session: Session } | null;
+  /** 返回到之前的会话的回调 */
+  onNavigateBack: () => void;
+  /** 跳转到指定会话的回调（可能跨项目），返回是否成功 */
+  onNavigateToSession: (encodedProject: string, sessionId: string) => Promise<boolean>;
 }
 
 /** 展开/收起动画的过渡参数 */
@@ -137,6 +145,136 @@ function CompactSummaryBlock({
 }
 
 /**
+ * SystemMessageBlock - 系统消息的专用渲染组件
+ *
+ * 以紧凑的折叠卡片形式展示 Claude Code CLI 自动注入的系统消息，
+ * 根据 systemLabel 显示不同的图标和标签文字：
+ * - '技能'：灯泡图标，标签"技能"
+ * - '计划'：文件图标，标签"计划"，展开后底部显示源会话跳转按钮
+ * - '系统'：终端图标，标签"系统"（默认）
+ */
+function SystemMessageBlock({
+  msg,
+  projectPath,
+  toolUseMap,
+  currentSession,
+  projects,
+  onNavigateToSession,
+}: {
+  msg: DisplayMessage;
+  projectPath: string;
+  toolUseMap: Map<string, ToolUseInfo>;
+  /** 当前选中的会话，用于判断引用的会话是否为当前会话 */
+  currentSession: Session | null;
+  /** 所有项目列表，用于判断引用的会话是否存在 */
+  projects: Project[];
+  /** 跳转到指定会话的回调 */
+  onNavigateToSession: (encodedProject: string, sessionId: string) => Promise<boolean>;
+}) {
+  const [expanded, setExpanded] = useState(false);
+
+  // 根据 systemLabel 选择图标和标签文字
+  const label = msg.systemLabel || '系统';
+  const IconComponent = label === '技能' ? Lightbulb : label === '计划' ? FileText : Terminal;
+
+  // 计划消息：解析源会话信息（仅当有 planSourcePath 时）
+  const planInfo = useMemo(() => {
+    if (!msg.planSourcePath) return null;
+    return parseJsonlPath(msg.planSourcePath);
+  }, [msg.planSourcePath]);
+
+  // 判断计划引用的会话状态
+  const planSessionStatus = useMemo(() => {
+    if (!planInfo) return null;
+    // 判断是否为当前会话
+    if (currentSession && planInfo.sessionId === currentSession.id) {
+      return 'current' as const;
+    }
+    // 在所有项目中查找该会话是否存在
+    const targetProject = projects.find(p => p.name === planInfo.encodedProject);
+    if (!targetProject) return 'not_found' as const;
+    const targetSession = targetProject.sessions.find(s => s.id === planInfo.sessionId);
+    if (!targetSession) return 'not_found' as const;
+    return 'navigable' as const;
+  }, [planInfo, currentSession, projects]);
+
+  return (
+    <motion.div
+      key={msg.displayId}
+      initial={{ opacity: 0, y: 5 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.15 }}
+    >
+      {/* 折叠态：紧凑的可点击标签，图标和标签文字根据 systemLabel 变化 */}
+      <div
+        className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg cursor-pointer select-none
+                    bg-muted/40 border border-border/40 hover:bg-muted/60 transition-colors text-xs text-muted-foreground"
+        onClick={() => setExpanded(!expanded)}
+        title={expanded ? `收起${label}消息` : `展开${label}消息`}
+      >
+        <IconComponent className="w-3 h-3" />
+        <span className="font-medium">{label}</span>
+        <span className="opacity-60">{formatTimestamp(msg.timestamp)}</span>
+        {expanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+      </div>
+
+      {/* 展开内容区域 */}
+      <AnimatePresence initial={false}>
+        {expanded && (
+          <motion.div
+            key="system-content"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={COMPACT_EXPAND_TRANSITION}
+            style={{ overflow: 'hidden' }}
+          >
+            <div className="rounded-xl p-4 mt-1.5 bg-muted/30 border border-border/50">
+              <div className="prose prose-sm dark:prose-invert max-w-none">
+                <MessageBlockList message={msg.rawMessage} projectPath={projectPath} toolUseMap={toolUseMap} />
+              </div>
+
+              {/* 计划消息：底部显示源会话引用信息和跳转按钮 */}
+              {planInfo && (
+                <div className="mt-3 pt-3 border-t border-border/50 flex items-center gap-2 text-xs text-muted-foreground">
+                  <FileText className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">
+                    源会话: {planInfo.sessionId.substring(0, 8)}...
+                  </span>
+                  {planSessionStatus === 'current' && (
+                    <span className="ml-auto px-2 py-0.5 rounded-full bg-primary/10 text-primary text-xs font-medium">
+                      当前会话
+                    </span>
+                  )}
+                  {planSessionStatus === 'navigable' && (
+                    <motion.button
+                      onClick={() => onNavigateToSession(planInfo.encodedProject, planInfo.sessionId)}
+                      className="ml-auto inline-flex items-center gap-1 px-2.5 py-1 rounded-lg
+                                 bg-primary/10 text-primary hover:bg-primary/20 transition-colors text-xs font-medium"
+                      title="跳转到源会话"
+                      whileHover={{ scale: 1.05 }}
+                      whileTap={{ scale: 0.95 }}
+                    >
+                      <ExternalLink className="w-3 h-3" />
+                      跳转到源会话
+                    </motion.button>
+                  )}
+                  {planSessionStatus === 'not_found' && (
+                    <span className="ml-auto text-xs text-muted-foreground/60 italic">
+                      会话不存在
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.div>
+  );
+}
+
+/**
  * ChatView - 聊天记录查看与管理组件
  *
  * 提供完整的聊天消息浏览体验，包含以下功能：
@@ -170,6 +308,10 @@ export function ChatView({
   onToggleSelectionMode,
   sidebarCollapsed,
   onExpandSidebar,
+  projects,
+  navBackTarget,
+  onNavigateBack,
+  onNavigateToSession,
 }: ChatViewProps) {
   /** 当前正在编辑的消息 UUID，为 null 表示没有消息处于编辑状态 */
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -724,7 +866,32 @@ export function ChatView({
       </div>
 
       {/* 消息列表：可滚动区域，遍历渲染所有经过过滤的 DisplayMessage */}
-      <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-4 custom-scrollbar">
+      <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-4 custom-scrollbar relative">
+        {/* 悬浮返回按钮：跳转到引用会话后显示，点击返回原来的会话 */}
+        <AnimatePresence>
+          {navBackTarget && (
+            <motion.div
+              initial={{ opacity: 0, y: -20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              transition={{ duration: 0.2 }}
+              className="sticky top-0 z-10 flex justify-center mb-2"
+            >
+              <motion.button
+                onClick={onNavigateBack}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full
+                           bg-primary text-primary-foreground shadow-lg hover:bg-primary/90
+                           transition-colors text-sm font-medium"
+                title={`返回: ${navBackTarget.session.name || navBackTarget.session.id.substring(0, 8)}`}
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
+              >
+                <ArrowLeft className="w-4 h-4" />
+                返回: {navBackTarget.session.name || navBackTarget.session.id.substring(0, 8)}
+              </motion.button>
+            </motion.div>
+          )}
+        </AnimatePresence>
         {filteredMessages.length === 0 ? (
           /* 空消息列表占位提示 */
           <div className="text-center text-muted-foreground py-8">没有消息</div>
@@ -733,6 +900,18 @@ export function ChatView({
             /* ====== 压缩摘要消息：分割线 + 默认折叠 ====== */
             msg.displayType === 'compact_summary' ? (
               <CompactSummaryBlock key={msg.displayId} msg={msg} projectPath={projectPath} toolUseMap={toolUseMap} />
+            ) :
+            /* ====== 系统消息：紧凑折叠卡片，支持细分标签和计划跳转 ====== */
+            msg.displayType === 'system' ? (
+              <SystemMessageBlock
+                key={msg.displayId}
+                msg={msg}
+                projectPath={projectPath}
+                toolUseMap={toolUseMap}
+                currentSession={session}
+                projects={projects}
+                onNavigateToSession={onNavigateToSession}
+              />
             ) :
             <motion.div
               key={msg.displayId}

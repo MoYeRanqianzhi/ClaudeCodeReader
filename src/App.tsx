@@ -82,6 +82,13 @@ function App() {
   const [selectionMode, setSelectionMode] = useState(false);
   /** 侧边栏折叠状态：为 true 时隐藏侧边栏，释放主内容区空间 */
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  /**
+   * 导航回退目标：存储跳转前的 { project, session }。
+   * 当用户通过"计划"消息跳转到引用会话后，此字段记录跳转前的位置，
+   * 使悬浮"返回"按钮可以将用户带回原来的会话。
+   * 为 null 时表示当前没有可回退的导航记录。
+   */
+  const [navBackTarget, setNavBackTarget] = useState<{ project: Project; session: Session } | null>(null);
   /** 侧边栏宽度（像素），可通过拖动右侧边缘调整 */
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH);
   /** 是否正在拖动调整侧边栏宽度，为 true 时禁用过渡动画确保拖动流畅 */
@@ -364,6 +371,51 @@ function App() {
       return !prev;
     });
   }, []);
+
+  /**
+   * 跳转到指定的会话（可能跨项目）
+   *
+   * 在所有项目中查找 encodedProject + sessionId 对应的会话，
+   * 如果找到则保存当前位置到回退栈并执行跳转。
+   *
+   * @param encodedProject - 编码后的项目目录名（如 "G--ClaudeProjects-Test"）
+   * @param sessionId - 目标会话 ID（UUID 格式）
+   * @returns 是否成功跳转
+   */
+  const handleNavigateToSession = useCallback(
+    async (encodedProject: string, sessionId: string): Promise<boolean> => {
+      // 在所有项目中查找目标项目
+      const targetProject = projects.find(p => p.name === encodedProject);
+      if (!targetProject) return false;
+      // 在目标项目中查找目标会话
+      const targetSession = targetProject.sessions.find(s => s.id === sessionId);
+      if (!targetSession) return false;
+
+      // 保存当前位置到回退栈（仅当当前有选中的项目和会话时）
+      if (currentProject && currentSession) {
+        setNavBackTarget({ project: currentProject, session: currentSession });
+      }
+
+      // 执行跳转：切换项目和会话
+      setCurrentProject(targetProject);
+      await handleSelectSession(targetSession);
+      return true;
+    },
+    [projects, currentProject, currentSession, handleSelectSession]
+  );
+
+  /**
+   * 返回到之前的会话
+   *
+   * 当 navBackTarget 存在时，恢复到跳转前的项目和会话，
+   * 然后清空回退栈。
+   */
+  const handleNavigateBack = useCallback(async () => {
+    if (!navBackTarget) return;
+    setCurrentProject(navBackTarget.project);
+    await handleSelectSession(navBackTarget.session);
+    setNavBackTarget(null);
+  }, [navBackTarget, handleSelectSession]);
 
   /**
    * 处理删除会话事件
@@ -689,6 +741,10 @@ function App() {
         onToggleSelectionMode={handleToggleSelectionMode}
         sidebarCollapsed={sidebarCollapsed}
         onExpandSidebar={() => setSidebarCollapsed(false)}
+        projects={projects}
+        navBackTarget={navBackTarget}
+        onNavigateBack={handleNavigateBack}
+        onNavigateToSession={handleNavigateToSession}
       />
 
       {/*
