@@ -10,13 +10,14 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
-  ChevronRight, Search, X, CheckSquare, Square, Filter,
+  ChevronRight, ChevronDown, ChevronUp, Search, X, CheckSquare, Square, Filter,
   Download, FileText, FileJson, RefreshCw, ArrowDown,
   Copy, Edit2, Trash2, MessageSquare, Bot, User, Lightbulb, Wrench, Archive
 } from 'lucide-react';
 import type { SessionMessage, Session, DisplayMessage } from '../types/claude';
 import { getMessageText, formatTimestamp } from '../utils/claudeData';
 import { transformForDisplay } from '../utils/messageTransform';
+import type { ToolUseInfo } from '../utils/messageTransform';
 import { MessageBlockList } from './MessageBlockList';
 import { MessageContentRenderer } from './MessageContentRenderer';
 
@@ -56,6 +57,83 @@ interface ChatViewProps {
   sidebarCollapsed: boolean;
   /** 展开侧边栏的回调 */
   onExpandSidebar: () => void;
+}
+
+/** 展开/收起动画的过渡参数 */
+const COMPACT_EXPAND_TRANSITION = { duration: 0.25, ease: 'easeInOut' as const };
+
+/**
+ * CompactSummaryBlock - 压缩摘要消息的专用渲染组件
+ *
+ * 以分割线 + 默认折叠的形式展示自动压缩生成的上下文续接消息。
+ * 分割线上显示 "--已压缩--" 标签，点击可展开查看完整摘要内容。
+ * 使用淡青绿色背景与普通消息区分。
+ */
+function CompactSummaryBlock({
+  msg,
+  projectPath,
+  toolUseMap,
+}: {
+  msg: DisplayMessage;
+  projectPath: string;
+  toolUseMap: Map<string, ToolUseInfo>;
+}) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <motion.div
+      key={msg.displayId}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.2 }}
+    >
+      {/* 分割线：--已压缩-- */}
+      <div
+        className="flex items-center gap-3 cursor-pointer select-none py-1"
+        onClick={() => setExpanded(!expanded)}
+        title={expanded ? '收起压缩摘要' : '展开压缩摘要'}
+      >
+        <div className="flex-1 border-t border-teal-400/40" />
+        <span className="inline-flex items-center gap-1.5 text-xs text-teal-600 dark:text-teal-400 font-medium">
+          <Archive className="w-3 h-3" />
+          已压缩
+          {expanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+        </span>
+        <div className="flex-1 border-t border-teal-400/40" />
+      </div>
+
+      {/* 折叠内容区域：展开时带高度动画 */}
+      <AnimatePresence initial={false}>
+        {expanded && (
+          <motion.div
+            key="compact-content"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={COMPACT_EXPAND_TRANSITION}
+            style={{ overflow: 'hidden' }}
+          >
+            <div className="rounded-xl p-4 mt-1 bg-teal-500/5 border border-teal-500/10">
+              {/* 头部：标签 + 时间戳 */}
+              <div className="flex items-center gap-2 mb-2">
+                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-teal-500 text-white">
+                  <Archive className="w-3 h-3" />
+                  压缩
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  {formatTimestamp(msg.timestamp)}
+                </span>
+              </div>
+              {/* 摘要内容 */}
+              <div className="prose prose-sm dark:prose-invert max-w-none">
+                <MessageBlockList message={msg.rawMessage} projectPath={projectPath} toolUseMap={toolUseMap} />
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.div>
+  );
 }
 
 /**
@@ -652,6 +730,10 @@ export function ChatView({
           <div className="text-center text-muted-foreground py-8">没有消息</div>
         ) : (
           filteredMessages.map((msg) => (
+            /* ====== 压缩摘要消息：分割线 + 默认折叠 ====== */
+            msg.displayType === 'compact_summary' ? (
+              <CompactSummaryBlock key={msg.displayId} msg={msg} projectPath={projectPath} toolUseMap={toolUseMap} />
+            ) :
             <motion.div
               key={msg.displayId}
               initial={{ opacity: 0, y: 10 }}
@@ -662,9 +744,7 @@ export function ChatView({
                   ? 'bg-primary/5 border border-primary/10'
                   : msg.displayType === 'tool_result'
                     ? 'bg-emerald-500/5 border border-emerald-500/10'
-                    : msg.displayType === 'compact_summary'
-                      ? 'bg-amber-500/5 border border-amber-500/10'
-                      : 'bg-muted/50 border border-border'
+                    : 'bg-muted/50 border border-border'
               } ${selectionMode && selectedMessages.has(msg.sourceUuid) ? 'ring-2 ring-primary' : ''}`}
               onClick={selectionMode ? () => onToggleSelect(msg.sourceUuid) : undefined}
               style={selectionMode ? { cursor: 'pointer' } : undefined}
@@ -688,24 +768,20 @@ export function ChatView({
                       )}
                     </button>
                   )}
-                  {/* 角色徽章：根据 displayType 区分用户/助手/工具结果/压缩摘要 */}
+                  {/* 角色徽章：根据 displayType 区分用户/助手/工具结果 */}
                   <span
                     className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium ${
                       msg.displayType === 'user'
                         ? 'bg-primary text-primary-foreground'
                         : msg.displayType === 'tool_result'
                           ? 'bg-emerald-600 text-white'
-                          : msg.displayType === 'compact_summary'
-                            ? 'bg-amber-500 text-white'
-                            : 'bg-secondary text-secondary-foreground'
+                          : 'bg-secondary text-secondary-foreground'
                     }`}
                   >
                     {msg.displayType === 'user' ? (
                       <User className="w-3 h-3" />
                     ) : msg.displayType === 'tool_result' ? (
                       <Wrench className="w-3 h-3" />
-                    ) : msg.displayType === 'compact_summary' ? (
-                      <Archive className="w-3 h-3" />
                     ) : (
                       <Bot className="w-3 h-3" />
                     )}
@@ -713,9 +789,7 @@ export function ChatView({
                       ? '用户'
                       : msg.displayType === 'tool_result'
                         ? '工具结果'
-                        : msg.displayType === 'compact_summary'
-                          ? '压缩'
-                          : '助手'}
+                        : '助手'}
                   </span>
                   {/* 消息时间戳 */}
                   <span className="text-xs text-muted-foreground">
