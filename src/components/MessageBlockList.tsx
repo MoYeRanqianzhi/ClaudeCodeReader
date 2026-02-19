@@ -8,6 +8,7 @@
 import type { SessionMessage } from '../types/claude';
 import type { ToolUseInfo } from '../utils/messageTransform';
 import { MessageContentRenderer } from './MessageContentRenderer';
+import { MarkdownRenderer } from './MarkdownRenderer';
 
 /**
  * MessageBlockList 组件的属性接口
@@ -41,11 +42,7 @@ export function MessageBlockList({ message, projectPath, toolUseMap }: MessageBl
   const content = message.message.content;
 
   if (typeof content === 'string') {
-    return (
-      <pre className="whitespace-pre-wrap break-words text-sm font-sans">
-        {content}
-      </pre>
-    );
+    return <MarkdownRenderer content={content} />;
   }
 
   if (Array.isArray(content)) {

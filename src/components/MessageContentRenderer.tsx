@@ -16,6 +16,7 @@ import type { MessageContent } from '../types/claude';
 import type { ToolUseInfo } from '../utils/messageTransform';
 import { ToolUseRenderer } from './ToolUseRenderer';
 import { ToolResultRenderer } from './ToolResultRenderer';
+import { MarkdownRenderer } from './MarkdownRenderer';
 
 /**
  * MessageContentRenderer 组件的属性接口
@@ -44,17 +45,16 @@ interface MessageContentRendererProps {
  */
 export function MessageContentRenderer({ block, projectPath, toolUseMap }: MessageContentRendererProps) {
   switch (block.type) {
-    /* ====== 文本内容块 ====== */
+    /* ====== 文本内容块（Markdown 渲染） ====== */
     case 'text':
       return (
-        <motion.pre
-          className="whitespace-pre-wrap break-words text-sm font-sans"
+        <motion.div
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.2 }}
         >
-          {block.text || ''}
-        </motion.pre>
+          <MarkdownRenderer content={block.text || ''} />
+        </motion.div>
       );
 
     /* ====== 工具调用块 → 委托给 ToolUseRenderer ====== */
@@ -89,14 +89,14 @@ export function MessageContentRenderer({ block, projectPath, toolUseMap }: Messa
           <summary className="cursor-pointer select-none text-sm">
             <Lightbulb className="w-4 h-4 inline-block shrink-0" /> 思考过程
           </summary>
-          <motion.pre
-            className="whitespace-pre-wrap break-words text-sm font-sans mt-2 italic opacity-70 custom-scrollbar"
+          <motion.div
+            className="mt-2 italic opacity-70"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             transition={{ duration: 0.15, delay: 0.05 }}
           >
-            {block.thinking || block.text || ''}
-          </motion.pre>
+            <MarkdownRenderer content={block.thinking || block.text || ''} />
+          </motion.div>
         </motion.details>
       );
 
