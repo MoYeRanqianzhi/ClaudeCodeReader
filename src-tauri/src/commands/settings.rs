@@ -228,8 +228,11 @@ pub async fn open_in_explorer(file_path: String) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
+        // 将 /select, 和路径合并为单个参数，避免 explorer 因中间空格而无法定位文件
+        // 正确格式: explorer /select,"C:\path\file.txt"
+        // 错误格式: explorer /select, "C:\path\file.txt"（空格导致 explorer 打开默认目录）
         tokio::process::Command::new("explorer")
-            .args(["/select,", &file_path])
+            .arg(format!("/select,{}", file_path))
             .spawn()
             .map_err(|e| format!("打开文件管理器失败: {}", e))?;
     }
