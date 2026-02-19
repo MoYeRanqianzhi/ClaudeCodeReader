@@ -46,7 +46,7 @@ const PLAN_JSONL_RE = /read the full transcript at:\s*(.+?\.jsonl)/;
  * 必须同时满足三个条件：
  * 1. 文本以 "Implement the following plan:\n\n#" 开头
  * 2. 文本结尾区域包含 "read the full transcript at: <path>.jsonl" 引用
- * 3. 文本中包含 Markdown 多级标题结构（至少有 ## 二级标题）
+ * 3. 文本中包含 Markdown 标题结构（至少有 # 一级或 ## 二级标题）
  *
  * @param text - 消息的纯文本内容
  * @returns match 为 true 时，jsonlPath 为提取到的源会话文件路径
@@ -57,8 +57,8 @@ function isPlanExecution(text: string): { match: boolean; jsonlPath?: string } {
   // 条件2：结尾包含 .jsonl 引用
   const m = text.match(PLAN_JSONL_RE);
   if (!m) return { match: false };
-  // 条件3：包含 Markdown 多级标题（至少有 ## 二级标题）
-  if (!/^##\s/m.test(text)) return { match: false };
+  // 条件3：包含 Markdown 标题（一级 # 或二级 ##）
+  if (!/^#{1,2}\s/m.test(text)) return { match: false };
   return { match: true, jsonlPath: m[1] };
 }
 
