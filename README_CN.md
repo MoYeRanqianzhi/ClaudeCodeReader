@@ -23,6 +23,19 @@ npm install -g claude-code-reader
 ccr
 ```
 
+由于缩写 `CCR` 可能与其他项目（如 ClaudeCodeRouter）冲突，还提供了以下别名命令：
+
+| 命令 | 说明 |
+|------|------|
+| `ccr` | 默认命令 |
+| `cr` | 短别名 |
+| `ccrr` | ClaudeCodeReader 缩写 |
+| `ClaudeCR` | Claude Code Reader |
+| `ClaudeCodeR` | Claude Code Reader（完整前缀） |
+| `CCReader` | CC + Reader |
+
+所有别名功能完全等价，均可启动桌面应用。
+
 ### 手动下载
 
 从 [Releases](https://github.com/MoYeRanQianZhi/ClaudeCodeReader/releases) 下载。
