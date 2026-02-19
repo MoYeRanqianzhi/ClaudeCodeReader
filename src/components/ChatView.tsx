@@ -17,7 +17,6 @@ import {
 import type { SessionMessage, Session, DisplayMessage } from '../types/claude';
 import { getMessageText, formatTimestamp } from '../utils/claudeData';
 import { transformForDisplay } from '../utils/messageTransform';
-import type { ToolUseInfo } from '../utils/messageTransform';
 import { MessageBlockList } from './MessageBlockList';
 import { MessageContentRenderer } from './MessageContentRenderer';
 
