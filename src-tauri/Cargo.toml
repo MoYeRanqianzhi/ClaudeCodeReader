@@ -31,3 +31,9 @@ tauri-plugin-opener = "2"
 tokio = { version = "1", features = ["fs", "rt"] }
 # 跨平台主目录获取：用于定位 ~/.claude/ 和 ~/.mo/CCR/ 目录
 dirs = "6"
+# 正则表达式：仅用于计划执行消息检测（2 个预编译模式）
+regex = "1"
+# 数据并行：大会话的并行分类（map-reduce 模式）
+rayon = "1.10"
+# SIMD 加速子串搜索：后端文本搜索核心
+memchr = "2"

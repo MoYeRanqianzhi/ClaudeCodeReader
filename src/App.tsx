@@ -17,7 +17,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { AnimatePresence } from 'motion/react';
 import { Sidebar, ChatView, SettingsPanel } from './components';
-import type { Project, Session, SessionMessage, ClaudeSettings, EnvSwitcherConfig, EnvProfile } from './types/claude';
+import type { Project, Session, ClaudeSettings, EnvSwitcherConfig, EnvProfile, TransformedSession } from './types/claude';
 import {
   getClaudeDataPath,
   getProjects,
@@ -28,8 +28,7 @@ import {
   deleteMessages,
   editMessageContent,
   deleteSession,
-  exportAsMarkdown,
-  exportAsJson,
+  exportSession,
   readEnvSwitcherConfig,
   saveEnvSwitcherConfig,
   applyEnvProfile,
@@ -60,8 +59,8 @@ function App() {
   const [currentProject, setCurrentProject] = useState<Project | null>(null);
   /** 当前选中的会话：用户在侧边栏点击选择的会话，null 表示未选择任何会话 */
   const [currentSession, setCurrentSession] = useState<Session | null>(null);
-  /** 当前会话的消息列表：从选中会话的 JSONL 文件中加载的所有消息 */
-  const [messages, setMessages] = useState<SessionMessage[]>([]);
+  /** 当前会话的转换结果：Rust 后端返回的 TransformedSession，包含 displayMessages、toolUseMap、tokenStats */
+  const [session, setSession] = useState<TransformedSession | null>(null);
   /** Claude Code 设置：从 ~/.claude/settings.json 加载的用户配置 */
   const [settings, setSettings] = useState<ClaudeSettings>({});
   /** 环境切换器配置：包含所有环境配置组和当前激活的配置 ID */
@@ -219,17 +218,17 @@ function App() {
    *
    * @param session - 用户选择的会话对象
    */
-  const handleSelectSession = useCallback(async (session: Session) => {
-    setCurrentSession(session);
+  const handleSelectSession = useCallback(async (sess: Session) => {
+    setCurrentSession(sess);
     // 切换会话时清空选择模式和已选消息，防止残留状态跨会话
     setSelectedMessages(new Set());
     setSelectionMode(false);
     try {
-      const msgs = await readSessionMessages(session.filePath);
-      setMessages(msgs);
+      const transformed = await readSessionMessages(sess.filePath);
+      setSession(transformed);
     } catch (err) {
       console.error('加载消息失败:', err);
-      setMessages([]);
+      setSession(null);
     }
   }, []);
 
@@ -243,8 +242,8 @@ function App() {
   const handleRefresh = useCallback(async () => {
     if (currentSession) {
       try {
-        const msgs = await readSessionMessages(currentSession.filePath);
-        setMessages(msgs);
+        const transformed = await readSessionMessages(currentSession.filePath);
+        setSession(transformed);
       } catch (err) {
         console.error('刷新消息失败:', err);
       }
@@ -264,12 +263,12 @@ function App() {
     async (uuid: string, blockEdits: { index: number; text: string }[]) => {
       if (!currentSession) return;
       try {
-        const updatedMessages = await editMessageContent(
+        const transformed = await editMessageContent(
           currentSession.filePath,
           uuid,
           blockEdits
         );
-        setMessages(updatedMessages);
+        setSession(transformed);
       } catch (err) {
         console.error('编辑消息失败:', err);
       }
@@ -290,8 +289,8 @@ function App() {
     async (uuid: string) => {
       if (!currentSession) return;
       try {
-        const updatedMessages = await deleteMessage(currentSession.filePath, uuid);
-        setMessages(updatedMessages);
+        const transformed = await deleteMessage(currentSession.filePath, uuid);
+        setSession(transformed);
       } catch (err) {
         console.error('删除消息失败:', err);
       }
@@ -347,8 +346,8 @@ function App() {
   const handleDeleteSelected = useCallback(async () => {
     if (!currentSession || selectedMessages.size === 0) return;
     try {
-      const updatedMessages = await deleteMessages(currentSession.filePath, selectedMessages);
-      setMessages(updatedMessages);
+      const transformed = await deleteMessages(currentSession.filePath, selectedMessages);
+      setSession(transformed);
       // 删除完成后退出选择模式
       setSelectedMessages(new Set());
       setSelectionMode(false);
@@ -432,7 +431,7 @@ function App() {
         // 如果删除的是当前正在查看的会话，清除选中状态和消息
         if (currentSession?.filePath === sessionFilePath) {
           setCurrentSession(null);
-          setMessages([]);
+          setSession(null);
           setSelectedMessages(new Set());
           setSelectionMode(false);
         }
@@ -457,16 +456,16 @@ function App() {
    */
   const handleExport = useCallback(
     async (format: 'markdown' | 'json') => {
-      if (!currentSession || messages.length === 0) return;
+      if (!currentSession || !session) return;
       try {
         const { save } = await import('@tauri-apps/plugin-dialog');
         const { writeTextFile } = await import('@tauri-apps/plugin-fs');
 
         const sessionName = currentSession.name || currentSession.id.substring(0, 8);
         const extension = format === 'markdown' ? 'md' : 'json';
-        const content = format === 'markdown'
-          ? exportAsMarkdown(messages, sessionName)
-          : exportAsJson(messages);
+
+        // 通过 Rust 后端导出
+        const content = await exportSession(currentSession.filePath, sessionName, format);
 
         // 弹出系统文件保存对话框
         const filePath = await save({
@@ -487,7 +486,7 @@ function App() {
         console.error('导出会话失败:', err);
       }
     },
-    [currentSession, messages]
+    [currentSession, session]
   );
 
   /**
@@ -726,7 +725,7 @@ function App() {
       {/* 主内容区：聊天消息展示和操作 */}
       <ChatView
         session={currentSession}
-        messages={messages}
+        transformedSession={session}
         projectPath={currentProject?.path || ''}
         onEditMessage={handleEditMessage}
         onDeleteMessage={handleDeleteMessage}

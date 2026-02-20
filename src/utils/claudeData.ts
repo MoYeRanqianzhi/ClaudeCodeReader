@@ -3,20 +3,21 @@
  * @description
  * 本文件封装了所有与 Claude Code 本地数据文件交互的工具函数，是 CCR 应用的数据访问层。
  *
- * ## 架构说明（v0.3.0 性能优化后）
- * 所有重型数据加载操作已迁移到 Rust 后端，通过 Tauri commands（`invoke()`）调用。
- * Rust 后端利用并行 I/O（tokio）和内存缓存，将启动加载时间大幅减少。
+ * ## 架构说明（v2.0 全量计算迁移后）
+ * 几乎所有数据操作已迁移到 Rust 后端，通过 Tauri commands（`invoke()`）调用。
+ * Rust 后端利用并行 I/O（tokio）、rayon 并行计算、memchr SIMD 搜索和内存缓存。
  *
  * **已迁移到 Rust 后端的操作**：
  * - 项目扫描和会话列表加载（`scan_projects`）
- * - 消息 JSONL 文件解析（`read_session_messages`）
- * - 消息编辑、删除操作
+ * - 消息 JSONL 文件解析 + 分类 + 转换（`read_session_messages` → `TransformedSession`）
+ * - 消息编辑、删除操作（返回 `TransformedSession`）
+ * - 文本搜索（`search_session`，memchr SIMD 加速）
+ * - 导出功能（`export_session`，Markdown/JSON）
  * - 设置和环境配置读写
  * - 命令历史记录读取
  *
  * **仍在前端的操作**：
- * - 导出功能（`exportAsMarkdown`、`exportAsJson`）：纯数据转换，不涉及 I/O
- * - 格式化工具（`getMessageText`、`formatTimestamp`）：纯函数，无需迁移
+ * - 格式化工具（`formatTimestamp`）：纯函数，无需迁移
  * - 环境配置的纯内存操作（`createEnvProfile`）：不涉及文件 I/O
  * - 应用环境配置（`applyEnvProfile`）：组合调用 readSettings + saveSettings
  * - 保存当前环境为配置组（`saveCurrentAsProfile`）：组合调用
@@ -27,8 +28,8 @@
  * - 设置读写：读取和保存 Claude Code 的 settings.json
  * - 历史记录：读取 Claude Code 命令历史
  * - 项目与会话：扫描项目目录、加载会话列表
- * - 消息操作：读取、编辑、删除会话消息
- * - 格式化工具：文本和时间的格式化辅助函数
+ * - 消息操作：读取、编辑、删除、搜索、导出会话消息
+ * - 格式化工具：时间的格式化辅助函数
  *
  * 数据目录结构：
  * ~/.claude/
@@ -44,7 +45,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core';
-import type { ClaudeSettings, Project, SessionMessage, HistoryEntry, EnvSwitcherConfig, EnvProfile } from '../types/claude';
+import type { ClaudeSettings, Project, SessionMessage, HistoryEntry, EnvSwitcherConfig, EnvProfile, TransformedSession } from '../types/claude';
 
 // ============ 路径工具函数 ============
 
@@ -247,17 +248,16 @@ export async function getProjects(claudePath: string): Promise<Project[]> {
 // ============ 消息操作 ============
 
 /**
- * 读取指定会话的所有消息
+ * 读取指定会话的所有消息并返回转换后的 TransformedSession
  *
- * 通过 Rust 后端高性能解析 JSONL 文件。
- * Rust 的 serde_json 解析速度比 JS 的 JSON.parse 快 3-10 倍。
- * 同时利用内存缓存避免重复解析。
+ * 通过 Rust 后端高性能解析 JSONL 文件，分类、转换后返回可直接渲染的数据。
+ * Rust 后端利用 rayon 并行 map + memchr SIMD 搜索，性能远超前端 JS。
  *
  * @param sessionFilePath - 会话 JSONL 文件的绝对路径
- * @returns 返回按文件顺序排列的 SessionMessage 数组；文件不存在时返回空数组
+ * @returns 返回 TransformedSession，包含倒序的 displayMessages、toolUseMap 和 tokenStats
  */
-export async function readSessionMessages(sessionFilePath: string): Promise<SessionMessage[]> {
-  return invoke<SessionMessage[]>('read_session_messages', { sessionFilePath });
+export async function readSessionMessages(sessionFilePath: string): Promise<TransformedSession> {
+  return invoke<TransformedSession>('read_session_messages', { sessionFilePath });
 }
 
 /**
@@ -282,29 +282,29 @@ export async function saveSessionMessages(sessionFilePath: string, messages: Ses
 /**
  * 删除指定的单条消息
  *
- * 通过 Rust 后端在单次 IPC 调用中完成：读取文件 → 过滤消息 → 写入文件。
+ * 通过 Rust 后端在单次 IPC 调用中完成：读取文件 → 过滤消息 → 写入文件 → 重新 transform。
  *
  * @param sessionFilePath - 会话 JSONL 文件的绝对路径
  * @param messageUuid - 要删除的消息的 UUID
- * @returns 返回删除后的剩余消息列表
+ * @returns 返回删除后重新转换的 TransformedSession
  */
-export async function deleteMessage(sessionFilePath: string, messageUuid: string): Promise<SessionMessage[]> {
-  return invoke<SessionMessage[]>('delete_message', { sessionFilePath, messageUuid });
+export async function deleteMessage(sessionFilePath: string, messageUuid: string): Promise<TransformedSession> {
+  return invoke<TransformedSession>('delete_message', { sessionFilePath, messageUuid });
 }
 
 /**
  * 批量删除多条消息
  *
- * 通过 Rust 后端在单次 IPC 调用中完成批量删除。
+ * 通过 Rust 后端在单次 IPC 调用中完成批量删除 → 重新 transform。
  * 前端传入的 Set<string> 会被转换为 string[] 进行 IPC 传输。
  *
  * @param sessionFilePath - 会话 JSONL 文件的绝对路径
  * @param messageUuids - 要删除的消息 UUID 集合（Set<string>）
- * @returns 返回删除后的剩余消息列表
+ * @returns 返回删除后重新转换的 TransformedSession
  */
-export async function deleteMessages(sessionFilePath: string, messageUuids: Set<string>): Promise<SessionMessage[]> {
+export async function deleteMessages(sessionFilePath: string, messageUuids: Set<string>): Promise<TransformedSession> {
   // Set<string> 无法直接通过 Tauri IPC 传输，需转换为数组
-  return invoke<SessionMessage[]>('delete_messages', {
+  return invoke<TransformedSession>('delete_messages', {
     sessionFilePath,
     messageUuids: Array.from(messageUuids),
   });
@@ -327,80 +327,62 @@ export interface BlockEdit {
 /**
  * 按内容块索引编辑指定消息
  *
- * 通过 Rust 后端在单次 IPC 调用中完成：读取文件 → 按块索引修改 → 写入文件。
+ * 通过 Rust 后端在单次 IPC 调用中完成：读取文件 → 按块索引修改 → 写入文件 → 重新 transform。
  * 每个内容块的 type 和其他元数据保持不变，仅更新对应的文本字段。
  *
  * @param sessionFilePath - 会话 JSONL 文件的绝对路径
  * @param messageUuid - 要编辑的消息的 UUID
  * @param blockEdits - 按块索引的编辑列表
- * @returns 返回更新后的完整消息列表
+ * @returns 返回更新后重新转换的 TransformedSession
  */
 export async function editMessageContent(
   sessionFilePath: string,
   messageUuid: string,
   blockEdits: BlockEdit[]
-): Promise<SessionMessage[]> {
-  return invoke<SessionMessage[]>('edit_message_content', {
+): Promise<TransformedSession> {
+  return invoke<TransformedSession>('edit_message_content', {
     sessionFilePath,
     messageUuid,
     blockEdits,
   });
 }
 
+// ============ 搜索功能 ============
+
+/**
+ * 在 Rust 后端搜索会话消息
+ *
+ * 使用 memchr SIMD 加速在预计算的小写化搜索文本上执行子串搜索，
+ * 仅返回匹配的 display_id 列表，避免大量文本通过 IPC 传输。
+ *
+ * @param sessionFilePath - 会话 JSONL 文件的绝对路径
+ * @param query - 搜索查询词
+ * @returns 返回匹配的 display_id 字符串数组
+ */
+export async function searchSession(sessionFilePath: string, query: string): Promise<string[]> {
+  return invoke<string[]>('search_session', { sessionFilePath, query });
+}
+
 // ============ 导出功能 ============
 
 /**
- * 将会话消息导出为 Markdown 格式字符串
+ * 导出会话为指定格式
  *
- * 生成结构化的 Markdown 文档，包含会话标题和每条消息的角色、时间戳和内容。
- * 仅导出 user 和 assistant 类型的消息，忽略系统消息。
- * 此函数为纯数据转换，不涉及文件 I/O，保留在前端。
+ * 通过 Rust 后端从文件直接读取原始消息并导出。
+ * Markdown 格式仅导出 user/assistant 消息的文本内容。
+ * JSON 格式保留所有消息的完整结构。
  *
- * @param messages - 要导出的消息列表
- * @param sessionName - 会话名称，用作文档标题
- * @returns Markdown 格式的字符串
+ * @param sessionFilePath - 会话 JSONL 文件的绝对路径
+ * @param sessionName - 会话名称（用于 Markdown 标题）
+ * @param format - 导出格式："markdown" 或 "json"
+ * @returns 返回导出的字符串内容
  */
-export function exportAsMarkdown(messages: SessionMessage[], sessionName: string): string {
-  const lines: string[] = [];
-  lines.push(`# ${sessionName}`);
-  lines.push('');
-  lines.push(`导出时间: ${new Date().toLocaleString('zh-CN')}`);
-  lines.push('');
-  lines.push('---');
-  lines.push('');
-
-  for (const msg of messages) {
-    // 仅导出用户和助手消息
-    if (msg.type !== 'user' && msg.type !== 'assistant') continue;
-
-    const role = msg.type === 'user' ? '用户' : '助手';
-    const time = formatTimestamp(msg.timestamp);
-    lines.push(`## ${role} (${time})`);
-    lines.push('');
-
-    const text = getMessageText(msg);
-    if (text) {
-      lines.push(text);
-    }
-    lines.push('');
-    lines.push('---');
-    lines.push('');
-  }
-
-  return lines.join('\n');
-}
-
-/**
- * 将会话消息导出为 JSON 格式字符串
- *
- * 直接将消息数组序列化为美化的 JSON 字符串，保留所有字段和结构信息。
- * 此函数为纯数据转换，保留在前端。
- *
- * @param messages - 要导出的消息列表
- * @returns 美化后的 JSON 字符串（2 空格缩进）
- */
-export function exportAsJson(messages: SessionMessage[]): string {
-  return JSON.stringify(messages, null, 2);
+export async function exportSession(
+  sessionFilePath: string,
+  sessionName: string,
+  format: 'markdown' | 'json'
+): Promise<string> {
+  return invoke<string>('export_session', { sessionFilePath, sessionName, format });
 }
 
 // ============ 格式化工具 ============
@@ -447,38 +429,6 @@ export async function checkFileExists(filePath: string): Promise<boolean> {
 export async function openInExplorer(filePath: string): Promise<void> {
   const { revealItemInDir } = await import('@tauri-apps/plugin-opener');
   return revealItemInDir(filePath);
-}
-
-/**
- * 提取消息的纯文本内容
- *
- * 从 SessionMessage 中提取可显示的文本内容，处理两种 content 格式：
- * - 字符串格式：直接返回
- * - 数组格式：提取所有 type='text' 内容块的 text 字段，用换行符拼接
- * 此函数为纯内存操作，保留在前端。
- *
- * @param message - 会话消息对象
- * @returns 返回消息的纯文本内容字符串；无内容时返回空字符串
- */
-export function getMessageText(message: SessionMessage): string {
-  if (!message.message) return '';
-
-  const content = message.message.content;
-
-  // 字符串格式：直接返回原文
-  if (typeof content === 'string') {
-    return content;
-  }
-
-  // 数组格式：过滤出 text 类型的内容块，提取文本并拼接
-  if (Array.isArray(content)) {
-    return content
-      .filter(c => c.type === 'text')
-      .map(c => c.text || '')
-      .join('\n');
-  }
-
-  return '';
 }
 
 /**

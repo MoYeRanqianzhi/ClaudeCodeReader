@@ -220,6 +220,13 @@ export interface SessionMessage {
    * 普通用户手动输入的消息不包含此字段。
    */
   caller?: unknown;
+  /**
+   * 源工具调用 ID：当此消息由 Claude 的工具调用（如 Skill tool）触发注入时，
+   * 此字段指向触发注入的 tool_use 块的 ID（格式为 "toolu_xxx"）。
+   * 典型场景：skill 加载上下文和 skill 扩展后的完整提示词。
+   * 普通用户手动输入的消息不包含此字段。
+   */
+  sourceToolUseID?: string;
 }
 
 /**
@@ -415,13 +422,15 @@ export interface AppState {
 /**
  * 显示用消息接口
  *
- * 由 messageTransform.ts 的 transformForDisplay() 函数生成，
- * 是原始 SessionMessage 经过拆分和重组后的显示层数据结构。
+ * 由 Rust 后端 `transformer::transform_session` 生成，
+ * 是原始 SessionMessage（serde_json::Value）经过分类、拆分和重组后的显示层数据结构。
  *
- * 核心变化：将 user 消息中的 tool_result 内容块拆分为独立的 DisplayMessage，
- * 使其在 ChatView 中作为独立气泡渲染，而不是作为用户消息的一部分。
+ * ## 与旧版的核心变化
+ * - **移除 `rawMessage`**：不再持有原始 SessionMessage 引用，所有需要的字段已直接提取
+ * - **Rust 直传**：所有字段由 Rust 后端计算后通过 IPC 传输，前端零文本处理
+ * - **倒序排列**：数组中最新消息在前，配合 CSS `column-reverse`
  *
- * @see transformForDisplay - 生成此类型的转换函数
+ * @see TransformedSession - 包含此类型的顶层 IPC 返回结构
  */
 export interface DisplayMessage {
   /** 原始消息的 UUID，用于编辑/删除操作时映射回原始数据 */
@@ -445,22 +454,6 @@ export interface DisplayMessage {
   timestamp: string;
   /** 内容块列表：仅包含属于该 DisplayMessage 的内容块 */
   content: MessageContent[];
-  /** 原始消息引用：用于获取 model、usage、cwd 等元数据 */
-  rawMessage: SessionMessage;
-  /**
-   * 系统消息子类型标签（仅 displayType === 'system' 时使用）。
-   * 用于在 SystemMessageBlock 中渲染更精细的分类标签和图标：
-   * - '技能'：isMeta 且以 "Base directory for this skill:" 开头的技能加载消息
-   * - '计划'：严格匹配 "Implement the following plan:" 格式的计划执行消息
-   * - '系统'：其余所有系统消息（命令输出、钩子、caller 等）
-   */
-  systemLabel?: string;
-  /**
-   * 计划消息引用的源会话 JSONL 文件路径（仅 systemLabel === '计划' 时有值）。
-   * 从 "read the full transcript at: <path>.jsonl" 中提取，
-   * 可进一步解析出 encodedProject 和 sessionId 用于会话跳转。
-   */
-  planSourcePath?: string;
   /** 是否可编辑 */
   editable: boolean;
   /**
@@ -468,4 +461,81 @@ export interface DisplayMessage {
    * 编辑操作时通过此映射将修改精确回写到原始消息的正确位置。
    */
   blockIndexMap: number[];
+  // ---- assistant 专属字段 ----
+  /** AI 模型标识符（仅 assistant 消息） */
+  model: string | null;
+  /** Token 使用量统计（仅 assistant 消息） */
+  usage: {
+    input_tokens: number;
+    output_tokens: number;
+    cache_creation_input_tokens?: number;
+    cache_read_input_tokens?: number;
+  } | null;
+  /** 子 agent 执行结果（仅包含 toolUseResult 的消息） */
+  toolUseResult: ToolUseResult | null;
+  /** 待办事项列表（仅包含 todos 的消息） */
+  todos: Todo[] | null;
+  // ---- system 专属字段 ----
+  /**
+   * 系统消息子类型标签（仅 displayType === 'system' 时使用）。
+   * - '技能'：isMeta 且以 "Base directory for this skill:" 开头的技能加载消息
+   * - '计划'：严格匹配 "Implement the following plan:" 格式的计划执行消息
+   * - '系统'：其余所有系统消息（命令输出、钩子、caller 等）
+   */
+  systemLabel: string | null;
+  /**
+   * 计划消息引用的源会话 JSONL 文件路径（仅 systemLabel === '计划' 时有值）。
+   * 从 "read the full transcript at: <path>.jsonl" 中提取。
+   */
+  planSourcePath: string | null;
+  // ---- 通用元数据 ----
+  /** 当前工作目录 */
+  cwd: string | null;
+}
+
+/**
+ * tool_use 块的摘要信息
+ *
+ * 由 Rust 后端从 assistant 消息的 content 中提取，
+ * 供 tool_result 渲染器查询关联的工具名称和参数。
+ */
+export interface ToolUseInfo {
+  /** 工具名称，如 "Read"、"Bash"、"Edit" */
+  name: string;
+  /** 工具输入参数 */
+  input: Record<string, unknown>;
+}
+
+/**
+ * Token 统计汇总接口
+ *
+ * 由 Rust 后端累加整个会话中所有 assistant 消息的 token 使用量，
+ * 供前端在会话头部一次性展示总计数据。
+ */
+export interface TokenStats {
+  /** 输入 token 总数 */
+  inputTokens: number;
+  /** 输出 token 总数 */
+  outputTokens: number;
+  /** 缓存创建 token 总数 */
+  cacheCreationInputTokens: number;
+  /** 缓存读取 token 总数 */
+  cacheReadInputTokens: number;
+}
+
+/**
+ * Rust 后端通过 IPC 返回的完整转换结果
+ *
+ * 包含前端渲染所需的所有数据，是前端唯一的数据源：
+ * - `displayMessages`：倒序排列（最新在前），配合 CSS `column-reverse`
+ * - `toolUseMap`：tool_use_id → ToolUseInfo 映射
+ * - `tokenStats`：整个会话的 Token 使用量汇总
+ */
+export interface TransformedSession {
+  /** 倒序排列的显示消息列表（最新在前） */
+  displayMessages: DisplayMessage[];
+  /** tool_use_id → ToolUseInfo 映射 */
+  toolUseMap: Record<string, ToolUseInfo>;
+  /** Token 统计汇总 */
+  tokenStats: TokenStats;
 }

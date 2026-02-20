@@ -6,6 +6,7 @@
 //! - `message` - 会话消息和内容块的数据结构
 //! - `settings` - Claude Code 设置和环境配置的数据结构
 
+pub mod display;
 pub mod message;
 pub mod project;
 pub mod settings;

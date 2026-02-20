@@ -3,23 +3,38 @@
  * @description 负责展示单个会话的完整聊天记录，支持消息浏览、过滤、编辑、删除、
  *              复制和多选批量操作等功能。是应用的核心内容区域，占据主界面的右侧大部分空间。
  *
+ *              v2.0 重构：
+ *              - 移除 transformForDisplay 调用，直接使用 Rust 返回的 TransformedSession
+ *              - 移除所有 rawMessage 引用，使用 DisplayMessage 上的直传字段
+ *              - 搜索迁移到 Rust 后端（memchr SIMD 加速）
+ *              - 多选筛选器（5 种类型 checkbox）
+ *              - 视口驱动渐进式渲染（useProgressiveRender）
+ *
  *              UI 层采用 motion/react 实现流畅动画效果，使用 lucide-react 图标库
  *              替代内联 SVG，以提升一致性和可维护性。
  */
 
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   ChevronRight, ChevronDown, ChevronUp, Search, X, CheckSquare, Square, Filter,
-  Download, FileText, FileJson, RefreshCw, ArrowDown, ArrowLeft,
-  Copy, Edit2, Trash2, MessageSquare, Bot, User, Lightbulb, Wrench, Archive, Terminal, ExternalLink
+  Download, FileText, FileJson, RefreshCw, ArrowLeft,
+  Copy, Edit2, Trash2, Bot, User, Lightbulb, Wrench, Archive, Terminal, ExternalLink
 } from 'lucide-react';
-import type { SessionMessage, Session, Project, DisplayMessage } from '../types/claude';
-import { getMessageText, formatTimestamp } from '../utils/claudeData';
-import { transformForDisplay, parseJsonlPath } from '../utils/messageTransform';
-import type { ToolUseInfo } from '../utils/messageTransform';
+import type { Session, Project, DisplayMessage, TransformedSession, ToolUseInfo } from '../types/claude';
+import { formatTimestamp, searchSession } from '../utils/claudeData';
+import { parseJsonlPath } from '../utils/messageTransform';
 import { MessageBlockList } from './MessageBlockList';
 import { MessageContentRenderer } from './MessageContentRenderer';
+import { useProgressiveRender } from '../hooks/useProgressiveRender';
+
+/**
+ * 可筛选的消息类型
+ */
+type FilterableType = 'user' | 'assistant' | 'tool_result' | 'compact_summary' | 'system';
+
+/** 所有筛选类型列表 */
+const ALL_FILTERS: FilterableType[] = ['user', 'assistant', 'tool_result', 'compact_summary', 'system'];
 
 /**
  * ChatView 组件的属性接口
@@ -27,8 +42,8 @@ import { MessageContentRenderer } from './MessageContentRenderer';
 interface ChatViewProps {
   /** 当前选中的会话对象，为 null 时显示空状态占位界面 */
   session: Session | null;
-  /** 当前会话中的所有消息列表 */
-  messages: SessionMessage[];
+  /** Rust 后端返回的转换结果，包含 displayMessages、toolUseMap、tokenStats */
+  transformedSession: TransformedSession | null;
   /** 当前项目根目录路径，用于工具显示的路径简化 */
   projectPath: string;
   /** 编辑消息的回调函数，接收消息 UUID 和按块索引的编辑列表 */
@@ -84,7 +99,7 @@ function CompactSummaryBlock({
 }: {
   msg: DisplayMessage;
   projectPath: string;
-  toolUseMap: Map<string, ToolUseInfo>;
+  toolUseMap: Record<string, ToolUseInfo>;
 }) {
   const [expanded, setExpanded] = useState(false);
 
@@ -134,7 +149,7 @@ function CompactSummaryBlock({
               </div>
               {/* 摘要内容 */}
               <div className="prose prose-sm dark:prose-invert max-w-none">
-                <MessageBlockList message={msg.rawMessage} projectPath={projectPath} toolUseMap={toolUseMap} />
+                <MessageBlockList content={msg.content} projectPath={projectPath} toolUseMap={toolUseMap} />
               </div>
             </div>
           </motion.div>
@@ -163,7 +178,7 @@ function SystemMessageBlock({
 }: {
   msg: DisplayMessage;
   projectPath: string;
-  toolUseMap: Map<string, ToolUseInfo>;
+  toolUseMap: Record<string, ToolUseInfo>;
   /** 当前选中的会话，用于判断引用的会话是否为当前会话 */
   currentSession: Session | null;
   /** 所有项目列表，用于判断引用的会话是否存在 */
@@ -231,7 +246,7 @@ function SystemMessageBlock({
           >
             <div className="rounded-xl p-4 mt-1.5 bg-muted/30 border border-border/50">
               <div className="prose prose-sm dark:prose-invert max-w-none">
-                <MessageBlockList message={msg.rawMessage} projectPath={projectPath} toolUseMap={toolUseMap} />
+                <MessageBlockList content={msg.content} projectPath={projectPath} toolUseMap={toolUseMap} />
               </div>
 
               {/* 计划消息：底部显示源会话引用信息和跳转按钮 */}
@@ -275,15 +290,27 @@ function SystemMessageBlock({
 }
 
 /**
+ * 筛选器配置项：类型 → 图标 + 标签
+ */
+const FILTER_CONFIG: { type: FilterableType; icon: typeof User; label: string }[] = [
+  { type: 'user', icon: User, label: '用户消息' },
+  { type: 'assistant', icon: Bot, label: '助手消息' },
+  { type: 'tool_result', icon: Wrench, label: '工具结果' },
+  { type: 'compact_summary', icon: Archive, label: '压缩摘要' },
+  { type: 'system', icon: Terminal, label: '系统消息' },
+];
+
+/**
  * ChatView - 聊天记录查看与管理组件
  *
  * 提供完整的聊天消息浏览体验，包含以下功能：
- * - 按角色（用户/助手/全部）过滤消息
+ * - 按类型（5 种 checkbox 多选）过滤消息
+ * - 后端搜索（debounce 300ms → Rust SIMD 加速）
+ * - 视口驱动渐进式渲染（先渲染可视区域，空闲时向外扩散）
  * - 内联编辑消息内容
  * - 一键复制消息文本到剪贴板
  * - 删除单条消息
  * - 多选模式：复选框选择、全选/取消全选、批量删除
- * - 自动滚动到最新消息
  * - 显示每条消息的 Token 使用量和模型信息
  *
  * 当没有选中会话时，显示一个引导用户选择会话的空状态界面。
@@ -293,7 +320,7 @@ function SystemMessageBlock({
  */
 export function ChatView({
   session,
-  messages,
+  transformedSession,
   projectPath,
   onEditMessage,
   onDeleteMessage,
@@ -313,60 +340,48 @@ export function ChatView({
   onNavigateBack,
   onNavigateToSession,
 }: ChatViewProps) {
-  /** 当前正在编辑的消息 UUID，为 null 表示没有消息处于编辑状态 */
+  /** 当前正在编辑的消息 displayId，为 null 表示没有消息处于编辑状态 */
   const [editingId, setEditingId] = useState<string | null>(null);
   /**
    * 编辑模式下各内容块的临时状态。
    * 每个条目记录了原始索引、块类型和用户正在修改的文本内容。
-   * 仅包含可编辑的块（text 和 thinking），tool_use/tool_result/image 以只读方式展示。
    */
   const [editBlocks, setEditBlocks] = useState<{ index: number; type: string; text: string }[]>([]);
   /**
    * 正在编辑的消息的原始 UUID（sourceUuid），用于提交编辑时定位原始消息。
-   * 与 editingId（displayId）配合使用：editingId 用于 UI 匹配，editingSourceUuid 用于数据操作。
    */
   const [editingSourceUuid, setEditingSourceUuid] = useState<string | null>(null);
-  /** 消息过滤器状态：'all' 显示全部，'user' 仅显示用户消息，'assistant' 仅显示助手消息 */
-  const [filter, setFilter] = useState<'all' | 'user' | 'assistant'>('all');
-  /** 搜索关键词：用于在消息文本中查找匹配内容，空字符串表示不搜索 */
+  /** 搜索关键词：输入后 debounce 300ms 发送到 Rust 后端搜索 */
   const [searchQuery, setSearchQuery] = useState('');
+  /** 后端搜索结果：匹配的 display_id 集合。null 表示无搜索 */
+  const [searchResults, setSearchResults] = useState<Set<string> | null>(null);
+  /** 多选筛选器激活状态 */
+  const [activeFilters, setActiveFilters] = useState<Set<FilterableType>>(new Set(ALL_FILTERS));
   /** 控制过滤器下拉菜单的显示/隐藏状态 */
   const [showFilterDropdown, setShowFilterDropdown] = useState(false);
   /** 控制导出下拉菜单的显示/隐藏状态 */
   const [showExportDropdown, setShowExportDropdown] = useState(false);
 
-  /**
-   * 将原始 SessionMessage[] 预处理为 DisplayMessage[]。
-   * - 把 user 消息中的 tool_result 块拆分为独立的虚拟消息
-   * - 构建 tool_use_id → ToolUseInfo 映射（用于工具结果标题显示）
-   * 仅在 messages 数组引用变化时重新计算。
-   */
-  const { displayMessages, toolUseMap } = useMemo(
-    () => transformForDisplay(messages),
-    [messages]
-  );
+  // 直接使用 Rust 返回的数据
+  const displayMessages = transformedSession?.displayMessages ?? [];
+  const toolUseMap = transformedSession?.toolUseMap ?? {};
+  const tokenStats = transformedSession?.tokenStats;
 
-  /** 消息列表底部的哨兵元素引用，用于自动滚动定位 */
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  /** 标记当前会话是否为首次加载消息，首次时使用瞬间跳转而非平滑滚动 */
-  const isInitialLoadRef = useRef(true);
   /** 过滤器下拉菜单容器引用，用于检测外部点击以关闭下拉菜单 */
   const filterRef = useRef<HTMLDivElement>(null);
   /** 导出下拉菜单容器引用，用于检测外部点击以关闭下拉菜单 */
   const exportRef = useRef<HTMLDivElement>(null);
+  /** 消息列表滚动容器引用 */
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   /**
    * 点击外部区域时自动关闭下拉菜单。
-   * 监听全局 mousedown 事件，如果点击目标不在下拉菜单容器内，
-   * 则关闭对应的下拉菜单。
    */
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      /* 检测过滤器下拉菜单的外部点击 */
       if (filterRef.current && !filterRef.current.contains(event.target as Node)) {
         setShowFilterDropdown(false);
       }
-      /* 检测导出下拉菜单的外部点击 */
       if (exportRef.current && !exportRef.current.contains(event.target as Node)) {
         setShowExportDropdown(false);
       }
@@ -377,91 +392,101 @@ export function ChatView({
   }, []);
 
   /**
-   * 根据当前过滤器和搜索关键词筛选 DisplayMessage 列表。
-   * 筛选流程：
-   * 1. 根据 filter 状态过滤角色（tool_result 仅在 'all' 模式下显示）
-   * 2. 如果有搜索关键词，进一步过滤包含关键词的消息（大小写不敏感）
+   * 后端搜索：debounce 300ms，调用 Rust SIMD 搜索
    */
-  const filteredMessages = displayMessages.filter((msg) => {
-    /* 过滤器逻辑：'user' 只显示用户消息，'assistant' 只显示助手消息，'all' 显示全部 */
-    if (filter === 'user' && msg.displayType !== 'user') return false;
-    if (filter === 'assistant' && msg.displayType !== 'assistant') return false;
-    // 搜索关键词过滤：在消息文本中进行大小写不敏感的匹配
-    if (searchQuery.trim()) {
-      const text = getMessageText(msg.rawMessage).toLowerCase();
-      return text.includes(searchQuery.trim().toLowerCase());
+  useEffect(() => {
+    if (!searchQuery.trim() || !session) {
+      setSearchResults(null);
+      return;
     }
-    return true;
-  });
+    const timer = setTimeout(async () => {
+      try {
+        const ids = await searchSession(session.filePath, searchQuery);
+        setSearchResults(new Set(ids));
+      } catch (err) {
+        console.error('搜索失败:', err);
+        setSearchResults(null);
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery, session]);
+
+  /**
+   * 组合筛选：类型多选 + 后端搜索结果交叉
+   *
+   * displayMessages 保持原始时间顺序（旧→新），前端通过 useProgressiveRender 实现视口优先加载。
+   */
+  const visibleMessages = useMemo(() => {
+    return displayMessages.filter(msg => {
+      // 类型筛选
+      if (!activeFilters.has(msg.displayType as FilterableType)) return false;
+      // 搜索结果筛选
+      if (searchResults !== null && !searchResults.has(msg.displayId)) return false;
+      return true;
+    });
+  }, [displayMessages, activeFilters, searchResults]);
 
   /** 过滤前的总显示消息数，用于显示 "N/M" 计数 */
   const totalMessages = displayMessages.length;
 
   /**
-   * 计算当前会话的 Token 使用量汇总。
-   * 遍历所有消息的 usage 字段，累加输入/输出/缓存 Token 数。
-   * 使用 useMemo 缓存计算结果，仅在 messages 变化时重新计算。
+   * 渐进式渲染：视口驱动，先渲染可视区域，空闲时向外扩散。
+   * isRendered(index) 判断 visibleMessages[index] 是否应渲染完整内容。
+   * handleScrollForRender 绑定到滚动容器的 onScroll。
+   * scrollToBottom 在初始渲染完成后调用。
    */
-  const tokenStats = useMemo(() => {
-    let inputTokens = 0;
-    let outputTokens = 0;
-    let cacheReadTokens = 0;
-    let cacheCreationTokens = 0;
-
-    for (const msg of messages) {
-      const usage = msg.message?.usage;
-      if (usage) {
-        inputTokens += usage.input_tokens || 0;
-        outputTokens += usage.output_tokens || 0;
-        cacheReadTokens += usage.cache_read_input_tokens || 0;
-        cacheCreationTokens += usage.cache_creation_input_tokens || 0;
-      }
-    }
-
-    return { inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens };
-  }, [messages]);
+  const { isRendered, handleScroll: handleScrollForRender, scrollToBottom } = useProgressiveRender(
+    visibleMessages.length,
+    scrollContainerRef,
+  );
 
   /**
-   * 滚动到消息列表底部。
-   * 根据是否为首次加载选择不同的滚动行为：
-   * - 首次加载会话时使用 'instant'（瞬间跳转），避免用户看到从顶部滑到底部的动画
-   * - 后续消息更新时使用 'smooth'（平滑滚动），提供流畅的视觉体验
+   * 加载会话后自动滚动到底部。
+   * scrollToBottom 内部使用双 requestAnimationFrame 确保布局完成后再滚动。
    */
-  const scrollToBottom = (instant = false) => {
-    messagesEndRef.current?.scrollIntoView({ behavior: instant ? 'instant' : 'smooth' });
-  };
-
-  /** 当会话切换时，标记下一次消息变化为首次加载 */
   useEffect(() => {
-    isInitialLoadRef.current = true;
-  }, [session]);
-
-  /** 当消息列表发生变化时，自动滚动到底部以展示最新消息 */
-  useEffect(() => {
-    if (messages.length > 0) {
-      scrollToBottom(isInitialLoadRef.current);
-      isInitialLoadRef.current = false;
+    if (transformedSession) {
+      scrollToBottom();
     }
-  }, [messages]);
+  }, [transformedSession, scrollToBottom]);
+
+  /**
+   * 切换单个筛选器
+   */
+  const toggleFilter = useCallback((type: FilterableType) => {
+    setActiveFilters(prev => {
+      const next = new Set(prev);
+      if (next.has(type)) {
+        next.delete(type);
+      } else {
+        next.add(type);
+      }
+      return next;
+    });
+  }, []);
+
+  /**
+   * 全选/取消全选筛选器
+   */
+  const toggleAllFilters = useCallback(() => {
+    setActiveFilters(prev => {
+      if (prev.size === ALL_FILTERS.length) {
+        // 当前全选 → 取消全选
+        return new Set<FilterableType>();
+      } else {
+        // 当前非全选 → 全选
+        return new Set(ALL_FILTERS);
+      }
+    });
+  }, []);
 
   /**
    * 开始编辑指定的显示消息。
-   * 从 DisplayMessage 的 content 中提取所有类型的可编辑块，
-   * 使用 blockIndexMap 映射回原始消息中的索引。
-   *
-   * 各块类型的编辑内容：
-   * - text: 编辑 text 字段
-   * - thinking: 编辑 thinking/text 字段
-   * - tool_use: 编辑 input 字段（JSON 格式）
-   * - tool_result: 编辑 content 字段（纯文本）
-   *
-   * @param msg - 要编辑的 DisplayMessage 对象
    */
   const handleStartEdit = (msg: DisplayMessage) => {
     setEditingId(msg.displayId);
     setEditingSourceUuid(msg.sourceUuid);
 
-    // 从 DisplayMessage 的 content 中提取所有可编辑块
     const blocks: { index: number; type: string; text: string }[] = [];
     msg.content.forEach((block, displayIdx) => {
       const originalIndex = msg.blockIndexMap[displayIdx];
@@ -473,7 +498,6 @@ export function ChatView({
           blocks.push({ index: originalIndex, type: 'thinking', text: block.thinking || block.text || '' });
           break;
         case 'tool_use':
-          // 将 input 对象序列化为格式化 JSON 字符串以便编辑
           blocks.push({
             index: originalIndex,
             type: 'tool_use',
@@ -481,7 +505,6 @@ export function ChatView({
           });
           break;
         case 'tool_result': {
-          // 提取 tool_result 的 content 文本
           let resultText = '';
           if (typeof block.content === 'string') {
             resultText = block.content;
@@ -493,12 +516,10 @@ export function ChatView({
           break;
         }
         default:
-          // image 等其他类型暂不支持编辑，跳过
           break;
       }
     });
 
-    // 如果没有可编辑块，创建一个空的 text 块
     if (blocks.length === 0) {
       blocks.push({ index: -1, type: 'text', text: '' });
     }
@@ -507,11 +528,9 @@ export function ChatView({
 
   /**
    * 保存编辑后的消息内容。
-   * 使用 editingSourceUuid（原始消息 UUID）通过 onEditMessage 回调持久化，然后退出编辑模式。
    */
   const handleSaveEdit = () => {
     if (editingId && editingSourceUuid) {
-      // 过滤掉新建的块（index === -1 且内容为空）
       const blockEdits = editBlocks
         .filter(b => b.index >= 0)
         .map(b => ({ index: b.index, text: b.text }));
@@ -524,7 +543,6 @@ export function ChatView({
 
   /**
    * 取消编辑操作。
-   * 清空编辑状态，丢弃所有未保存的修改，恢复消息的只读显示。
    */
   const handleCancelEdit = () => {
     setEditingId(null);
@@ -534,9 +552,6 @@ export function ChatView({
 
   /**
    * 将指定文本复制到系统剪贴板。
-   * 使用 Clipboard API 异步写入文本内容。
-   *
-   * @param text - 要复制的文本内容
    */
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -544,18 +559,12 @@ export function ChatView({
 
   /**
    * 获取 DisplayMessage 的文本内容，用于复制到剪贴板。
-   * - user/assistant 消息：使用原始消息的文本提取
-   * - tool_result 消息：提取工具返回的文本内容
-   *
-   * @param msg - DisplayMessage 对象
-   * @returns 消息的可读文本内容
+   * 直接从 content 块中提取文本，不依赖 rawMessage。
    */
   const getDisplayText = (msg: DisplayMessage): string => {
-    if (msg.displayType !== 'tool_result') {
-      return getMessageText(msg.rawMessage);
-    }
-    // tool_result 消息：提取工具返回的文本
     return msg.content.map(block => {
+      if (block.type === 'text' && block.text) return block.text;
+      if (block.type === 'thinking' && (block.thinking || block.text)) return block.thinking || block.text;
       if (block.type === 'tool_result') {
         if (typeof block.content === 'string') return block.content;
         if (Array.isArray(block.content)) {
@@ -570,7 +579,6 @@ export function ChatView({
   if (!session) {
     return (
       <div className="flex-1 flex flex-col bg-background min-w-0">
-        {/* 侧边栏折叠时在顶部显示展开按钮，否则用户无法恢复侧边栏 */}
         {sidebarCollapsed && (
           <div className="p-2 border-b border-border bg-card">
             <motion.button
@@ -584,14 +592,12 @@ export function ChatView({
             </motion.button>
           </div>
         )}
-        {/* 空状态引导：居中显示动画图标和渐变提示文字 */}
         <div className="flex-1 flex items-center justify-center">
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             className="text-center text-muted-foreground"
           >
-            {/* 呼吸 + 轻微摇摆动画的聊天气泡图标 */}
             <motion.svg
               animate={{ scale: [1, 1.1, 1], rotate: [0, 5, -5, 0] }}
               transition={{ duration: 3, repeat: Infinity, ease: 'easeInOut' }}
@@ -614,12 +620,14 @@ export function ChatView({
     );
   }
 
+  /** 筛选器是否处于非全选状态 */
+  const isFiltered = activeFilters.size !== ALL_FILTERS.length;
+
   return (
     <div className="flex-1 flex flex-col bg-background min-w-0">
-      {/* 头部工具栏：显示会话标题、消息计数、过滤器、多选操作、刷新和滚动按钮 */}
+      {/* 头部工具栏 */}
       <div className="p-4 border-b border-border flex items-start justify-between gap-4 bg-card shrink-0">
         <div className="flex items-start gap-3 min-w-0 shrink">
-          {/* 侧边栏折叠时显示展开按钮 */}
           {sidebarCollapsed && (
             <motion.button
               onClick={onExpandSidebar}
@@ -637,22 +645,22 @@ export function ChatView({
             </h2>
             <p className="text-sm text-muted-foreground break-words">
               {formatTimestamp(session.timestamp)} ·{' '}
-              {searchQuery.trim() || filter !== 'all'
-                ? `显示 ${filteredMessages.length}/${totalMessages} 条消息`
-                : `${filteredMessages.length} 条消息`}
-              {/* Token 使用量汇总：仅在有统计数据时显示 */}
-              {tokenStats.inputTokens + tokenStats.outputTokens > 0 && (
+              {searchQuery.trim() || isFiltered
+                ? `显示 ${visibleMessages.length}/${totalMessages} 条消息`
+                : `${visibleMessages.length} 条消息`}
+              {/* Token 使用量汇总 */}
+              {tokenStats && tokenStats.inputTokens + tokenStats.outputTokens > 0 && (
                 <span className="ml-2">
                   · 输入: {tokenStats.inputTokens.toLocaleString()} · 输出: {tokenStats.outputTokens.toLocaleString()}
-                  {tokenStats.cacheReadTokens > 0 && ` · 缓存读取: ${tokenStats.cacheReadTokens.toLocaleString()}`}
-                  {tokenStats.cacheCreationTokens > 0 && ` · 缓存创建: ${tokenStats.cacheCreationTokens.toLocaleString()}`}
+                  {tokenStats.cacheReadInputTokens > 0 && ` · 缓存读取: ${tokenStats.cacheReadInputTokens.toLocaleString()}`}
+                  {tokenStats.cacheCreationInputTokens > 0 && ` · 缓存创建: ${tokenStats.cacheCreationInputTokens.toLocaleString()}`}
                 </span>
               )}
             </p>
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          {/* 搜索输入框：带搜索图标和可选的清除按钮 */}
+          {/* 搜索输入框 */}
           <div className="relative">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <input
@@ -662,7 +670,6 @@ export function ChatView({
               placeholder="搜索消息..."
               className="pl-8 pr-3 py-1.5 w-40 rounded-lg bg-secondary text-foreground border border-border focus:outline-none focus:border-ring text-sm"
             />
-            {/* 搜索内容不为空时显示清除按钮 */}
             {searchQuery && (
               <button
                 onClick={() => setSearchQuery('')}
@@ -673,7 +680,7 @@ export function ChatView({
             )}
           </div>
 
-          {/* 选择模式切换按钮：激活时高亮显示 */}
+          {/* 选择模式切换按钮 */}
           <motion.button
             onClick={onToggleSelectionMode}
             className={`p-2 rounded-lg transition-colors ${
@@ -686,23 +693,21 @@ export function ChatView({
             <CheckSquare className="w-5 h-5" />
           </motion.button>
 
-          {/* 选择模式下的操作按钮组：全选、取消、批量删除 */}
+          {/* 选择模式下的操作按钮组 */}
           <AnimatePresence>
             {selectionMode && (
               <>
-                {/* 全选按钮 */}
                 <motion.button
                   initial={{ opacity: 0, scale: 0.8 }}
                   animate={{ opacity: 1, scale: 1 }}
                   exit={{ opacity: 0, scale: 0.8 }}
-                  onClick={() => onSelectAll([...new Set(filteredMessages.map(m => m.sourceUuid))])}
+                  onClick={() => onSelectAll([...new Set(visibleMessages.map(m => m.sourceUuid))])}
                   className="px-3 py-1.5 rounded-lg bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors text-sm"
                   whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.95 }}
                 >
                   全选
                 </motion.button>
-                {/* 取消全选按钮 */}
                 <motion.button
                   initial={{ opacity: 0, scale: 0.8 }}
                   animate={{ opacity: 1, scale: 1 }}
@@ -714,7 +719,6 @@ export function ChatView({
                 >
                   取消
                 </motion.button>
-                {/* 批量删除按钮：显示已选数量，无选中时禁用 */}
                 <motion.button
                   initial={{ opacity: 0, scale: 0.8 }}
                   animate={{ opacity: 1, scale: 1 }}
@@ -736,22 +740,27 @@ export function ChatView({
             )}
           </AnimatePresence>
 
-          {/* 消息角色过滤器：自定义下拉菜单，替代原生 <select> */}
+          {/* 多选筛选器下拉菜单 */}
           <div className="relative" ref={filterRef}>
             <motion.button
               onClick={() => setShowFilterDropdown(!showFilterDropdown)}
-              className={`p-2 rounded-lg transition-colors ${
-                filter !== 'all'
+              className={`p-2 rounded-lg transition-colors relative ${
+                isFiltered
                   ? 'bg-primary text-primary-foreground'
                   : 'hover:bg-accent'
               }`}
-              title="过滤消息"
+              title="筛选消息类型"
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.95 }}
             >
               <Filter className="w-5 h-5" />
+              {/* 非全选时显示徽章 */}
+              {isFiltered && (
+                <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-destructive text-destructive-foreground text-[10px] flex items-center justify-center font-bold">
+                  {activeFilters.size}
+                </span>
+              )}
             </motion.button>
-            {/* 过滤器下拉菜单：带动画的选项列表 */}
             <AnimatePresence>
               {showFilterDropdown && (
                 <motion.div
@@ -759,47 +768,44 @@ export function ChatView({
                   animate={{ opacity: 1, y: 0, scale: 1 }}
                   exit={{ opacity: 0, y: -8, scale: 0.95 }}
                   transition={{ duration: 0.15 }}
-                  className="absolute right-0 top-full mt-1 w-44 bg-popover border border-border rounded-lg shadow-lg z-50 overflow-hidden"
+                  className="absolute right-0 top-full mt-1 w-48 bg-popover border border-border rounded-lg shadow-lg z-50 overflow-hidden"
                 >
-                  {/* 全部消息选项 */}
+                  {/* 全选/取消全选 */}
                   <button
-                    onClick={() => { setFilter('all'); setShowFilterDropdown(false); }}
-                    className={`w-full flex items-center gap-2 px-3 py-2 text-sm transition-colors ${
-                      filter === 'all' ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/50'
-                    }`}
+                    onClick={toggleAllFilters}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-sm transition-colors hover:bg-accent/50 border-b border-border/50"
                   >
-                    <MessageSquare className="w-4 h-4" />
-                    <span className="flex-1 text-left">全部消息</span>
-                    {filter === 'all' && <span className="text-primary">&#10003;</span>}
+                    {activeFilters.size === ALL_FILTERS.length ? (
+                      <CheckSquare className="w-4 h-4 text-primary" />
+                    ) : (
+                      <Square className="w-4 h-4" />
+                    )}
+                    <span className="flex-1 text-left font-medium">
+                      {activeFilters.size === ALL_FILTERS.length ? '取消全选' : '全选'}
+                    </span>
                   </button>
-                  {/* 仅用户消息选项 */}
-                  <button
-                    onClick={() => { setFilter('user'); setShowFilterDropdown(false); }}
-                    className={`w-full flex items-center gap-2 px-3 py-2 text-sm transition-colors ${
-                      filter === 'user' ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/50'
-                    }`}
-                  >
-                    <User className="w-4 h-4" />
-                    <span className="flex-1 text-left">仅用户</span>
-                    {filter === 'user' && <span className="text-primary">&#10003;</span>}
-                  </button>
-                  {/* 仅助手消息选项 */}
-                  <button
-                    onClick={() => { setFilter('assistant'); setShowFilterDropdown(false); }}
-                    className={`w-full flex items-center gap-2 px-3 py-2 text-sm transition-colors ${
-                      filter === 'assistant' ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/50'
-                    }`}
-                  >
-                    <Bot className="w-4 h-4" />
-                    <span className="flex-1 text-left">仅助手</span>
-                    {filter === 'assistant' && <span className="text-primary">&#10003;</span>}
-                  </button>
+                  {/* 各类型 checkbox */}
+                  {FILTER_CONFIG.map(({ type, icon: Icon, label }) => (
+                    <button
+                      key={type}
+                      onClick={() => toggleFilter(type)}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-sm transition-colors hover:bg-accent/50"
+                    >
+                      {activeFilters.has(type) ? (
+                        <CheckSquare className="w-4 h-4 text-primary" />
+                      ) : (
+                        <Square className="w-4 h-4" />
+                      )}
+                      <Icon className="w-4 h-4" />
+                      <span className="flex-1 text-left">{label}</span>
+                    </button>
+                  ))}
                 </motion.div>
               )}
             </AnimatePresence>
           </div>
 
-          {/* 导出按钮：自定义下拉菜单，统一 Markdown 和 JSON 导出入口 */}
+          {/* 导出按钮 */}
           <div className="relative" ref={exportRef}>
             <motion.button
               onClick={() => setShowExportDropdown(!showExportDropdown)}
@@ -810,7 +816,6 @@ export function ChatView({
             >
               <Download className="w-5 h-5" />
             </motion.button>
-            {/* 导出下拉菜单：带动画的格式选项列表 */}
             <AnimatePresence>
               {showExportDropdown && (
                 <motion.div
@@ -820,7 +825,6 @@ export function ChatView({
                   transition={{ duration: 0.15 }}
                   className="absolute right-0 top-full mt-1 w-44 bg-popover border border-border rounded-lg shadow-lg z-50 overflow-hidden"
                 >
-                  {/* Markdown 格式导出 */}
                   <button
                     onClick={() => { onExport('markdown'); setShowExportDropdown(false); }}
                     className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent/50 transition-colors"
@@ -828,7 +832,6 @@ export function ChatView({
                     <FileText className="w-4 h-4" />
                     <span>Markdown</span>
                   </button>
-                  {/* JSON 格式导出 */}
                   <button
                     onClick={() => { onExport('json'); setShowExportDropdown(false); }}
                     className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent/50 transition-colors"
@@ -841,7 +844,7 @@ export function ChatView({
             </AnimatePresence>
           </div>
 
-          {/* 刷新按钮：悬停时旋转 180 度提供视觉反馈 */}
+          {/* 刷新按钮 */}
           <motion.button
             onClick={onRefresh}
             className="p-2 rounded-lg hover:bg-accent transition-colors"
@@ -851,68 +854,44 @@ export function ChatView({
           >
             <RefreshCw className="w-5 h-5" />
           </motion.button>
-
-          {/* 滚动到底部按钮 */}
-          <motion.button
-            onClick={() => scrollToBottom()}
-            className="p-2 rounded-lg hover:bg-accent transition-colors"
-            title="滚动到底部"
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-          >
-            <ArrowDown className="w-5 h-5" />
-          </motion.button>
         </div>
       </div>
 
-      {/* 消息列表：可滚动区域，遍历渲染所有经过过滤的 DisplayMessage */}
-      <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-4 custom-scrollbar relative">
-        {/* 悬浮返回按钮：跳转到引用会话后显示，点击返回原来的会话 */}
-        <AnimatePresence>
-          {navBackTarget && (
-            <motion.div
-              initial={{ opacity: 0, y: -20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
-              transition={{ duration: 0.2 }}
-              className="sticky top-0 z-10 flex justify-center mb-2"
-            >
-              <motion.button
-                onClick={onNavigateBack}
-                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full
-                           bg-primary text-primary-foreground shadow-lg hover:bg-primary/90
-                           transition-colors text-sm font-medium"
-                title={`返回: ${navBackTarget.session.name || navBackTarget.session.id.substring(0, 8)}`}
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-              >
-                <ArrowLeft className="w-4 h-4" />
-                返回: {navBackTarget.session.name || navBackTarget.session.id.substring(0, 8)}
-              </motion.button>
-            </motion.div>
-          )}
-        </AnimatePresence>
-        {filteredMessages.length === 0 ? (
-          /* 空消息列表占位提示 */
+      {/* 消息列表：正常时间顺序，视口驱动渐进式渲染 */}
+      <div
+        ref={scrollContainerRef}
+        onScroll={handleScrollForRender}
+        className="flex-1 overflow-y-auto overflow-x-hidden p-4 gap-4 custom-scrollbar relative flex flex-col"
+      >
+        {/* 渲染说明：
+            displayMessages 保持原始时间顺序（旧→新）。
+            useProgressiveRender 控制哪些消息渲染完整内容，未渲染的显示轻量占位符。
+            加载时自动 scrollTop = scrollHeight 跳到底部。 */}
+
+        {visibleMessages.length === 0 ? (
           <div className="text-center text-muted-foreground py-8">没有消息</div>
         ) : (
-          filteredMessages.map((msg) => (
-            /* ====== 压缩摘要消息：分割线 + 默认折叠 ====== */
-            msg.displayType === 'compact_summary' ? (
-              <CompactSummaryBlock key={msg.displayId} msg={msg} projectPath={projectPath} toolUseMap={toolUseMap} />
-            ) :
-            /* ====== 系统消息：紧凑折叠卡片，支持细分标签和计划跳转 ====== */
-            msg.displayType === 'system' ? (
-              <SystemMessageBlock
-                key={msg.displayId}
-                msg={msg}
-                projectPath={projectPath}
-                toolUseMap={toolUseMap}
-                currentSession={session}
-                projects={projects}
-                onNavigateToSession={onNavigateToSession}
-              />
-            ) :
+          visibleMessages.map((msg, index) => (
+            <div
+              key={msg.displayId}
+              data-msg-index={index}
+              style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 100px' }}
+            >
+              {isRendered(index) ? (
+                /* ====== 已渲染：完整消息内容 ====== */
+                msg.displayType === 'compact_summary' ? (
+                  <CompactSummaryBlock msg={msg} projectPath={projectPath} toolUseMap={toolUseMap} />
+                ) :
+                msg.displayType === 'system' ? (
+                  <SystemMessageBlock
+                    msg={msg}
+                    projectPath={projectPath}
+                    toolUseMap={toolUseMap}
+                    currentSession={session}
+                    projects={projects}
+                    onNavigateToSession={onNavigateToSession}
+                  />
+                ) :
             <motion.div
               key={msg.displayId}
               initial={{ opacity: 0, y: 10 }}
@@ -928,10 +907,9 @@ export function ChatView({
               onClick={selectionMode ? () => onToggleSelect(msg.sourceUuid) : undefined}
               style={selectionMode ? { cursor: 'pointer' } : undefined}
             >
-              {/* 消息头部：显示复选框（选择模式）、角色标签、时间戳、模型信息和操作按钮 */}
+              {/* 消息头部 */}
               <div className="flex items-center justify-between mb-2 group">
                 <div className="flex items-center gap-2">
-                  {/* 选择模式下显示复选框图标 */}
                   {selectionMode && (
                     <button
                       onClick={(e) => {
@@ -947,7 +925,6 @@ export function ChatView({
                       )}
                     </button>
                   )}
-                  {/* 角色徽章：根据 displayType 区分用户/助手/工具结果 */}
                   <span
                     className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium ${
                       msg.displayType === 'user'
@@ -970,21 +947,18 @@ export function ChatView({
                         ? '工具结果'
                         : '助手'}
                   </span>
-                  {/* 消息时间戳 */}
                   <span className="text-xs text-muted-foreground">
                     {formatTimestamp(msg.timestamp)}
                   </span>
-                  {/* 模型信息：仅在消息包含模型字段时显示（通常仅 assistant 消息有） */}
-                  {msg.rawMessage.message?.model && msg.displayType === 'assistant' && (
+                  {/* 模型信息：直接从 DisplayMessage 字段获取 */}
+                  {msg.model && msg.displayType === 'assistant' && (
                     <span className="text-xs text-muted-foreground">
-                      模型: {msg.rawMessage.message.model}
+                      模型: {msg.model}
                     </span>
                   )}
                 </div>
-                {/* 非选择模式下显示操作按钮，鼠标悬停在消息卡片上时才可见 */}
                 {!selectionMode && (
                   <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                    {/* 复制按钮 */}
                     <motion.button
                       onClick={() => copyToClipboard(getDisplayText(msg))}
                       className="p-1.5 rounded hover:bg-accent transition-colors"
@@ -994,7 +968,6 @@ export function ChatView({
                     >
                       <Copy className="w-4 h-4" />
                     </motion.button>
-                    {/* 编辑按钮：仅对可编辑消息显示 */}
                     {msg.editable && (
                     <motion.button
                       onClick={() => handleStartEdit(msg)}
@@ -1006,7 +979,6 @@ export function ChatView({
                       <Edit2 className="w-4 h-4" />
                     </motion.button>
                     )}
-                    {/* 删除按钮：使用 sourceUuid 删除原始消息 */}
                     <motion.button
                       onClick={() => onDeleteMessage(msg.sourceUuid)}
                       className="p-1.5 rounded hover:bg-destructive/10 text-destructive transition-colors"
@@ -1020,14 +992,12 @@ export function ChatView({
                 )}
               </div>
 
-              {/* 消息内容：根据是否处于编辑模式显示不同的 UI */}
+              {/* 消息内容 */}
               {editingId === msg.displayId ? (
-                /* 编辑模式：按内容块类型分别显示对应样式的编辑器 */
                 <div className="space-y-2">
                   {editBlocks.map((block, blockIdx) => (
                     <div key={blockIdx}>
                       {block.type === 'thinking' ? (
-                        /* 思考块编辑器：保持紫色虚线左边框 + 淡紫色背景的原始样式 */
                         <div className="thinking-block">
                           <div className="flex items-center gap-1 text-xs font-medium mb-2 opacity-70">
                             <Lightbulb className="w-4 h-4 shrink-0" /> 思考过程
@@ -1043,7 +1013,6 @@ export function ChatView({
                           />
                         </div>
                       ) : block.type === 'tool_use' ? (
-                        /* 工具调用编辑器：蓝色主题 + 等宽字体，编辑 JSON 格式的 input 参数 */
                         <div className="rounded-lg border border-blue-300/30 dark:border-blue-500/20 bg-blue-50/30 dark:bg-blue-950/20 p-3">
                           <div className="flex items-center gap-1 text-xs font-medium mb-2 text-blue-600 dark:text-blue-400">
                             <Wrench className="w-4 h-4 shrink-0" /> 工具调用参数 (JSON)
@@ -1059,7 +1028,6 @@ export function ChatView({
                           />
                         </div>
                       ) : block.type === 'tool_result' ? (
-                        /* 工具结果编辑器：绿色主题，编辑工具返回的文本内容 */
                         <div className="rounded-lg border border-emerald-300/30 dark:border-emerald-500/20 bg-emerald-50/30 dark:bg-emerald-950/20 p-3">
                           <div className="flex items-center gap-1 text-xs font-medium mb-2 text-emerald-600 dark:text-emerald-400">
                             <Wrench className="w-4 h-4 shrink-0" /> 工具结果
@@ -1075,7 +1043,6 @@ export function ChatView({
                           />
                         </div>
                       ) : (
-                        /* 文本块编辑器：普通样式 */
                         <textarea
                           value={block.text}
                           onChange={(e) => {
@@ -1088,7 +1055,6 @@ export function ChatView({
                       )}
                     </div>
                   ))}
-                  {/* 只读展示不可编辑的内容块（仅 image 等无法文本编辑的类型） */}
                   {msg.content.some(b =>
                     b.type !== 'text' && b.type !== 'thinking' &&
                     b.type !== 'tool_use' && b.type !== 'tool_result'
@@ -1125,24 +1091,56 @@ export function ChatView({
                   </div>
                 </div>
               ) : (
-                /* 只读模式：通过 MessageBlockList 渲染所有类型的内容块 */
                 <div className="prose prose-sm dark:prose-invert max-w-none">
-                  <MessageBlockList message={msg.rawMessage} projectPath={projectPath} toolUseMap={toolUseMap} />
+                  <MessageBlockList content={msg.content} projectPath={projectPath} toolUseMap={toolUseMap} />
                 </div>
               )}
 
-              {/* Token 使用量：仅对 assistant 消息显示本条消息消耗的输入/输出 token 数 */}
-              {msg.displayType === 'assistant' && msg.rawMessage.message?.usage && (
+              {/* Token 使用量：直接从 DisplayMessage 字段获取 */}
+              {msg.displayType === 'assistant' && msg.usage && (
                 <div className="mt-2 pt-2 border-t border-border/50 text-xs text-muted-foreground">
-                  输入: {msg.rawMessage.message.usage.input_tokens} tokens · 输出:{' '}
-                  {msg.rawMessage.message.usage.output_tokens} tokens
+                  输入: {msg.usage.input_tokens} tokens · 输出:{' '}
+                  {msg.usage.output_tokens} tokens
                 </div>
               )}
             </motion.div>
+              ) : (
+                /* ====== 未渲染：轻量占位符 ====== */
+                <div
+                  style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 60px' }}
+                  className="min-h-[60px]"
+                />
+              )}
+            </div>
           ))
         )}
-        <div ref={messagesEndRef} />
       </div>
+
+      {/* 悬浮返回按钮 */}
+      <AnimatePresence>
+        {navBackTarget && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 20 }}
+            transition={{ duration: 0.2 }}
+            className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10"
+          >
+            <motion.button
+              onClick={onNavigateBack}
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full
+                         bg-primary text-primary-foreground shadow-lg hover:bg-primary/90
+                         transition-colors text-sm font-medium"
+              title={`返回: ${navBackTarget.session.name || navBackTarget.session.id.substring(0, 8)}`}
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+            >
+              <ArrowLeft className="w-4 h-4" />
+              返回: {navBackTarget.session.name || navBackTarget.session.id.substring(0, 8)}
+            </motion.button>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

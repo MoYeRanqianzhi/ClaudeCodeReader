@@ -19,8 +19,7 @@ import {
   CheckCircle2, XCircle, ChevronDown, ChevronUp,
   FolderOpen
 } from 'lucide-react';
-import type { MessageContent } from '../types/claude';
-import type { ToolUseInfo } from '../utils/messageTransform';
+import type { MessageContent, ToolUseInfo } from '../types/claude';
 import { formatToolArgs } from '../utils/toolFormatter';
 import { checkFileExists, openInExplorer } from '../utils/claudeData';
 
@@ -36,8 +35,8 @@ const EXPAND_TRANSITION = { duration: 0.25, ease: 'easeInOut' as const };
 interface ToolResultRendererProps {
   /** 要渲染的 tool_result 内容块 */
   block: MessageContent;
-  /** tool_use_id → ToolUseInfo 的映射表，用于查询关联的工具名称和参数 */
-  toolUseMap: Map<string, ToolUseInfo>;
+  /** tool_use_id → ToolUseInfo 的映射表（Rust HashMap 序列化为 Record） */
+  toolUseMap: Record<string, ToolUseInfo>;
   /** 当前项目的根目录路径，用于路径简化 */
   projectPath: string;
   /** 是否为错误结果 */
@@ -83,7 +82,7 @@ export function ToolResultRenderer({
 
   // 查询关联的 tool_use 块信息
   const toolUseId = block.tool_use_id || '';
-  const toolInfo = toolUseMap.get(toolUseId);
+  const toolInfo = toolUseMap[toolUseId];
   const toolName = toolInfo?.name || '';
   const toolInput = toolInfo?.input || {};
 

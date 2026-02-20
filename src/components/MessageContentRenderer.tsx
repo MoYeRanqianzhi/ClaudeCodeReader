@@ -12,8 +12,7 @@
 
 import { motion } from 'motion/react';
 import { Lightbulb } from 'lucide-react';
-import type { MessageContent } from '../types/claude';
-import type { ToolUseInfo } from '../utils/messageTransform';
+import type { MessageContent, ToolUseInfo } from '../types/claude';
 import { ToolUseRenderer } from './ToolUseRenderer';
 import { ToolResultRenderer } from './ToolResultRenderer';
 import { MarkdownRenderer } from './MarkdownRenderer';
@@ -26,8 +25,8 @@ interface MessageContentRendererProps {
   block: MessageContent;
   /** 当前项目根目录路径，用于工具显示的路径简化 */
   projectPath: string;
-  /** tool_use_id → ToolUseInfo 映射，用于 tool_result 关联查询 */
-  toolUseMap: Map<string, ToolUseInfo>;
+  /** tool_use_id → ToolUseInfo 映射（Rust HashMap 序列化为 Record） */
+  toolUseMap: Record<string, ToolUseInfo>;
 }
 
 /**

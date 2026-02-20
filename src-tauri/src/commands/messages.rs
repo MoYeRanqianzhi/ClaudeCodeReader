@@ -1,34 +1,43 @@
 //! # 消息读写 Tauri Commands
 //!
-//! 提供会话消息的读取、编辑、删除等 Tauri command 处理函数：
-//! - `read_session_messages` - 读取会话的所有消息
-//! - `delete_message` - 删除单条消息
-//! - `delete_messages` - 批量删除消息
-//! - `edit_message_content` - 编辑消息文本内容
+//! 提供会话消息的读取、编辑、删除、搜索、导出等 Tauri command 处理函数：
+//! - `read_session_messages` - 读取会话并返回 TransformedSession
+//! - `delete_message` - 删除单条消息并返回更新后的 TransformedSession
+//! - `delete_messages` - 批量删除消息并返回更新后的 TransformedSession
+//! - `edit_message_content` - 编辑消息文本内容并返回更新后的 TransformedSession
 //! - `delete_session` - 删除整个会话文件
+//! - `search_session` - 在缓存的搜索文本上执行 SIMD 加速子串搜索
+//! - `export_session` - 导出会话为 Markdown 或 JSON 格式
 //!
-//! 集成了内存缓存层，避免重复解析 JSONL 文件。
+//! ## 数据流
+//! - **读取路径**：文件 → parse → transform → 缓存 → IPC 返回 TransformedSession
+//! - **写入路径**：从文件重新读取原始 Vec<Value> → 修改 → 写回文件 → 重新 transform → 更新缓存 → IPC 返回
+//! - **搜索路径**：前端查询词 → Rust 在缓存搜索文本上 SIMD 搜索 → 返回匹配 display_id 列表
+//!
+//! ## 写入安全保证
+//! 写入操作始终从文件重新读取原始 `Vec<Value>`，经用户编辑后写回。
+//! 整个写入路径完全不经过 transformer，原始数据中不可能出现任何额外字段。
 
 use std::collections::HashSet;
 
 use serde_json::Value;
 use tauri::State;
 
-use crate::models::message::SessionMessage;
+use crate::models::display::TransformedSession;
 use crate::services::cache::AppCache;
-use crate::services::parser;
+use crate::services::{export, parser, transformer};
 
-/// 读取指定会话的所有消息
+/// 读取指定会话的所有消息并返回转换后的 TransformedSession
 ///
-/// 高性能读取 JSONL 文件并解析为消息数组。
-/// 优先从缓存获取，缓存未命中时从文件系统读取并存入缓存。
+/// 高性能读取 JSONL 文件，经过分类、转换后返回前端可直接渲染的数据。
+/// 优先从缓存获取，缓存未命中时从文件系统读取、转换并存入缓存。
 ///
 /// # 参数
 /// - `session_file_path` - 会话 JSONL 文件的绝对路径
 /// - `cache` - Tauri managed state，内存缓存
 ///
 /// # 返回值
-/// 返回按文件顺序排列的消息数组
+/// 返回 TransformedSession，包含倒序的 display_messages、tool_use_map 和 token_stats
 ///
 /// # 错误
 /// 文件读取失败时返回错误
@@ -36,25 +45,28 @@ use crate::services::parser;
 pub async fn read_session_messages(
     session_file_path: String,
     cache: State<'_, AppCache>,
-) -> Result<Vec<SessionMessage>, String> {
+) -> Result<TransformedSession, String> {
     // 优先尝试从缓存获取
-    if let Some(cached) = cache.get_messages(&session_file_path) {
+    if let Some(cached) = cache.get_session(&session_file_path) {
         return Ok(cached);
     }
 
     // 缓存未命中，从文件系统读取
     let messages = parser::read_messages(&session_file_path).await?;
 
-    // 存入缓存
-    cache.set_messages(&session_file_path, messages.clone());
+    // 转换为 TransformedSession + 搜索文本
+    let (transformed, search_texts) = transformer::transform_session(&messages);
 
-    Ok(messages)
+    // 存入缓存
+    cache.set_session(&session_file_path, transformed.clone(), search_texts);
+
+    Ok(transformed)
 }
 
 /// 删除指定的单条消息
 ///
 /// 根据消息 UUID 从会话文件中移除一条消息，然后将剩余消息重新保存到文件。
-/// 操作完成后更新缓存。
+/// 操作完成后重新 transform 并更新缓存，返回新的 TransformedSession。
 ///
 /// # 参数
 /// - `session_file_path` - 会话 JSONL 文件的绝对路径
@@ -62,7 +74,7 @@ pub async fn read_session_messages(
 /// - `cache` - Tauri managed state，内存缓存
 ///
 /// # 返回值
-/// 返回删除后的剩余消息列表
+/// 返回删除后重新转换的 TransformedSession
 ///
 /// # 错误
 /// 文件读写失败时返回错误
@@ -71,11 +83,12 @@ pub async fn delete_message(
     session_file_path: String,
     message_uuid: String,
     cache: State<'_, AppCache>,
-) -> Result<Vec<SessionMessage>, String> {
+) -> Result<TransformedSession, String> {
+    // 从文件读取原始数据
     let messages = parser::read_messages(&session_file_path).await?;
 
     // 过滤掉目标消息（通过 uuid 字段匹配）
-    let filtered: Vec<SessionMessage> = messages
+    let filtered: Vec<Value> = messages
         .into_iter()
         .filter(|msg| {
             msg.get("uuid")
@@ -85,12 +98,14 @@ pub async fn delete_message(
         })
         .collect();
 
+    // 写回文件
     parser::write_messages(&session_file_path, &filtered).await?;
 
-    // 更新缓存（写入后文件 mtime 已变化，旧缓存自动失效）
-    cache.set_messages(&session_file_path, filtered.clone());
+    // 重新 transform 并更新缓存
+    let (transformed, search_texts) = transformer::transform_session(&filtered);
+    cache.set_session(&session_file_path, transformed.clone(), search_texts);
 
-    Ok(filtered)
+    Ok(transformed)
 }
 
 /// 批量删除多条消息
@@ -104,7 +119,7 @@ pub async fn delete_message(
 /// - `cache` - Tauri managed state，内存缓存
 ///
 /// # 返回值
-/// 返回删除后的剩余消息列表
+/// 返回删除后重新转换的 TransformedSession
 ///
 /// # 错误
 /// 文件读写失败时返回错误
@@ -117,13 +132,13 @@ pub async fn delete_messages(
     session_file_path: String,
     message_uuids: Vec<String>,
     cache: State<'_, AppCache>,
-) -> Result<Vec<SessionMessage>, String> {
+) -> Result<TransformedSession, String> {
     let messages = parser::read_messages(&session_file_path).await?;
 
     // 将 UUID 列表转换为 HashSet，实现 O(1) 查找
     let uuid_set: HashSet<&str> = message_uuids.iter().map(|s| s.as_str()).collect();
 
-    let filtered: Vec<SessionMessage> = messages
+    let filtered: Vec<Value> = messages
         .into_iter()
         .filter(|msg| {
             msg.get("uuid")
@@ -135,10 +150,11 @@ pub async fn delete_messages(
 
     parser::write_messages(&session_file_path, &filtered).await?;
 
-    // 更新缓存
-    cache.set_messages(&session_file_path, filtered.clone());
+    // 重新 transform 并更新缓存
+    let (transformed, search_texts) = transformer::transform_session(&filtered);
+    cache.set_session(&session_file_path, transformed.clone(), search_texts);
 
-    Ok(filtered)
+    Ok(transformed)
 }
 
 /// 单个内容块的编辑数据
@@ -163,6 +179,8 @@ pub struct BlockEdit {
 /// 每个内容块的 `type` 和其他元数据字段保持不变，仅修改文本：
 /// - `text` 类型块：更新 `text` 字段
 /// - `thinking` 类型块：更新 `thinking` 字段（若不存在则更新 `text` 字段）
+/// - `tool_use` 类型块：将编辑文本解析为 JSON 并更新 `input` 字段
+/// - `tool_result` 类型块：更新 `content` 字段为纯文本
 /// - 字符串格式 content：整体替换为第一个编辑项的文本
 ///
 /// # 参数
@@ -172,7 +190,7 @@ pub struct BlockEdit {
 /// - `cache` - Tauri managed state，内存缓存
 ///
 /// # 返回值
-/// 返回更新后的完整消息列表
+/// 返回更新后重新转换的 TransformedSession
 ///
 /// # 错误
 /// 文件读写失败时返回错误
@@ -182,10 +200,11 @@ pub async fn edit_message_content(
     message_uuid: String,
     block_edits: Vec<BlockEdit>,
     cache: State<'_, AppCache>,
-) -> Result<Vec<SessionMessage>, String> {
+) -> Result<TransformedSession, String> {
+    // 从文件读取原始数据
     let messages = parser::read_messages(&session_file_path).await?;
 
-    let updated: Vec<SessionMessage> = messages
+    let updated: Vec<Value> = messages
         .into_iter()
         .map(|mut msg| {
             // 检查是否为目标消息
@@ -245,7 +264,6 @@ pub async fn edit_message_content(
                                             }
                                         }
                                         // tool_use 块：将编辑文本解析为 JSON 并更新 input 字段
-                                        // 前端传入的 text 是 JSON.stringify 后的字符串
                                         "tool_use" => {
                                             if let Ok(parsed) =
                                                 serde_json::from_str::<Value>(&edit.text)
@@ -260,8 +278,7 @@ pub async fn edit_message_content(
                                                 Value::String(edit.text.clone()),
                                             );
                                         }
-                                        // 其他类型块：
-                                        // 尝试更新 text 字段（如果存在的话）
+                                        // 其他类型块：尝试更新 text 字段
                                         _ => {
                                             if block.contains_key("text") {
                                                 block.insert(
@@ -283,18 +300,20 @@ pub async fn edit_message_content(
         })
         .collect();
 
+    // 写回文件
     parser::write_messages(&session_file_path, &updated).await?;
 
-    // 更新缓存
-    cache.set_messages(&session_file_path, updated.clone());
+    // 重新 transform 并更新缓存
+    let (transformed, search_texts) = transformer::transform_session(&updated);
+    cache.set_session(&session_file_path, transformed.clone(), search_texts);
 
-    Ok(updated)
+    Ok(transformed)
 }
 
 /// 删除指定的会话文件
 ///
 /// 从文件系统中永久移除会话的 JSONL 文件。此操作不可撤销。
-/// 同时清除该会话的消息缓存和项目列表缓存。
+/// 同时清除该会话的缓存和项目列表缓存。
 ///
 /// # 参数
 /// - `session_file_path` - 要删除的会话 JSONL 文件的绝对路径
@@ -312,8 +331,77 @@ pub async fn delete_session(
         .map_err(|e| format!("删除会话文件失败: {}", e))?;
 
     // 清除相关缓存
-    cache.invalidate_messages(&session_file_path);
+    cache.invalidate_session(&session_file_path);
     cache.invalidate_projects();
 
     Ok(())
+}
+
+/// 在缓存中搜索会话消息
+///
+/// 在 Rust 端使用 memchr SIMD 加速搜索预计算的小写化文本，
+/// 仅返回匹配的 display_id 列表，避免大量文本通过 IPC 传输。
+///
+/// 如果缓存中没有该会话的数据，会先加载并缓存。
+///
+/// # 参数
+/// - `session_file_path` - 会话 JSONL 文件的绝对路径
+/// - `query` - 搜索查询词
+/// - `cache` - Tauri managed state，内存缓存
+///
+/// # 返回值
+/// 返回匹配的 display_id 字符串列表
+///
+/// # 错误
+/// 会话数据加载失败时返回错误
+#[tauri::command]
+pub async fn search_session(
+    session_file_path: String,
+    query: String,
+    cache: State<'_, AppCache>,
+) -> Result<Vec<String>, String> {
+    // 空查询返回空结果
+    if query.trim().is_empty() {
+        return Ok(vec![]);
+    }
+
+    // 确保缓存中有数据
+    if cache.get_session(&session_file_path).is_none() {
+        let messages = parser::read_messages(&session_file_path).await?;
+        let (transformed, search_texts) = transformer::transform_session(&messages);
+        cache.set_session(&session_file_path, transformed, search_texts);
+    }
+
+    // 在缓存中搜索（SIMD memchr 加速）
+    cache
+        .search_in_cache(&session_file_path, &query)
+        .ok_or_else(|| "会话未在缓存中找到".into())
+}
+
+/// 导出会话为 Markdown 或 JSON 格式
+///
+/// 从文件直接读取原始消息数据进行导出，不经过 transformer。
+///
+/// # 参数
+/// - `session_file_path` - 会话 JSONL 文件的绝对路径
+/// - `session_name` - 会话名称（用于 Markdown 标题）
+/// - `format` - 导出格式："markdown" 或 "json"
+///
+/// # 返回值
+/// 返回导出的字符串内容
+///
+/// # 错误
+/// 文件读取失败或不支持的格式时返回错误
+#[tauri::command]
+pub async fn export_session(
+    session_file_path: String,
+    session_name: String,
+    format: String,
+) -> Result<String, String> {
+    let messages = parser::read_messages(&session_file_path).await?;
+    match format.as_str() {
+        "markdown" => Ok(export::to_markdown(&messages, &session_name)),
+        "json" => Ok(export::to_json(&messages)),
+        _ => Err(format!("不支持的导出格式: {}", format)),
+    }
 }
