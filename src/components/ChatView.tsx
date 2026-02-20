@@ -494,15 +494,23 @@ export function ChatView({
     scrollContainerRef,
   );
 
+  /** 记录上一个会话的文件路径，用于判断是否切换了会话 */
+  const prevSessionPathRef = useRef<string | null>(null);
+
   /**
-   * 加载会话后自动滚动到底部。
-   * scrollToBottom 内部使用双 requestAnimationFrame 确保布局完成后再滚动。
+   * 仅在切换到不同会话时自动滚动到底部。
+   * 同一会话的数据更新（编辑保存、手动刷新）不触发滚动，保持用户当前阅读位置。
    */
   useEffect(() => {
-    if (transformedSession) {
-      scrollToBottom();
+    if (transformedSession && session) {
+      if (prevSessionPathRef.current !== session.filePath) {
+        prevSessionPathRef.current = session.filePath;
+        scrollToBottom();
+      }
+    } else if (!session) {
+      prevSessionPathRef.current = null;
     }
-  }, [transformedSession, scrollToBottom]);
+  }, [transformedSession, session, scrollToBottom]);
 
   /**
    * 切换单个筛选器
