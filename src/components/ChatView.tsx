@@ -891,12 +891,8 @@ export function ChatView({
                     onNavigateToSession={onNavigateToSession}
                   />
                 ) :
-            <motion.div
-              key={msg.displayId}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.2 }}
-              className={`rounded-xl p-4 message-bubble ${
+            <div
+              className={`rounded-xl p-4 message-bubble animate-msg-in ${
                 msg.displayType === 'user'
                   ? 'bg-primary/5 border border-primary/10'
                   : msg.displayType === 'tool_result'
@@ -958,35 +954,29 @@ export function ChatView({
                 </div>
                 {!selectionMode && (
                   <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <motion.button
+                    <button
                       onClick={() => copyToClipboard(getDisplayText(msg))}
-                      className="p-1.5 rounded hover:bg-accent transition-colors"
+                      className="p-1.5 rounded hover:bg-accent transition-all hover:scale-110 active:scale-90"
                       title="复制"
-                      whileHover={{ scale: 1.1 }}
-                      whileTap={{ scale: 0.9 }}
                     >
                       <Copy className="w-4 h-4" />
-                    </motion.button>
+                    </button>
                     {msg.editable && (
-                    <motion.button
+                    <button
                       onClick={() => handleStartEdit(msg)}
-                      className="p-1.5 rounded hover:bg-accent transition-colors"
+                      className="p-1.5 rounded hover:bg-accent transition-all hover:scale-110 active:scale-90"
                       title="编辑"
-                      whileHover={{ scale: 1.1 }}
-                      whileTap={{ scale: 0.9 }}
                     >
                       <Edit2 className="w-4 h-4" />
-                    </motion.button>
+                    </button>
                     )}
-                    <motion.button
+                    <button
                       onClick={() => onDeleteMessage(msg.sourceUuid)}
-                      className="p-1.5 rounded hover:bg-destructive/10 text-destructive transition-colors"
+                      className="p-1.5 rounded hover:bg-destructive/10 text-destructive transition-all hover:scale-110 active:scale-90"
                       title="删除"
-                      whileHover={{ scale: 1.1 }}
-                      whileTap={{ scale: 0.9 }}
                     >
                       <Trash2 className="w-4 h-4" />
-                    </motion.button>
+                    </button>
                   </div>
                 )}
               </div>
@@ -1102,7 +1092,7 @@ export function ChatView({
                   {msg.usage.output_tokens} tokens
                 </div>
               )}
-            </motion.div>
+            </div>
               ) : (
                 /* ====== 未渲染：轻量占位符（固定高度，确保 scrollHeight 稳定） ====== */
                 <div className="h-[60px]" />

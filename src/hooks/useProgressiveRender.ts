@@ -14,7 +14,13 @@
  * - `rangesRef` 存储实际区间数据（不触发渲染）
  * - `version` 是一个递增计数器（触发渲染的唯一 state）
  * - 空闲扩散在 ref 上累积多批修改，最后一次性 bump version
- * - 避免了「每批 10 条 → 重渲染 → 下一批 → 重渲染」的连锁反应
+ * - 避免了「每批 → 重渲染 → 下一批 → 重渲染」的连锁反应
+ *
+ * ## 滚动事件节流
+ *
+ * handleScroll 使用 requestAnimationFrame 节流：
+ * - 每帧最多执行一次 scroll handler
+ * - 避免 querySelectorAll + offsetTop 造成 60fps 布局抖动
  *
  * ## 渲染优先级
  *
@@ -28,20 +34,21 @@ import { useRef, useEffect, useCallback, useState } from 'react';
 
 // ============ 常量 ============
 
-/** 首次渲染的消息数量（覆盖一屏 + 少量缓冲） */
-const INITIAL_BATCH = 40;
+/** 首次渲染的消息数量（覆盖两屏 + 缓冲） */
+const INITIAL_BATCH = 80;
 
 /**
  * 每次空闲帧内渲染的消息数量。
  * 设较大值减少 idle 回调次数，每次回调内不触发 React 渲染。
  */
-const IDLE_BATCH = 20;
+const IDLE_BATCH = 60;
 
 /**
  * 空闲扩散累积到此数量后触发一次 React 渲染。
- * 值越大，渲染次数越少，但用户等待空白消息的时间越长。
+ * 500 条消息 → ~2 次 flush（而非之前的 ~10 次）。
+ * 值越大，React 重渲染次数越少，但用户等待空白占位符的时间越长。
  */
-const FLUSH_THRESHOLD = 50;
+const FLUSH_THRESHOLD = 250;
 
 // ============ 区间工具函数 ============
 
@@ -98,7 +105,7 @@ function totalRendered(ranges: Range[]): number {
  * @param scrollContainerRef - 滚动容器的 ref
  * @returns
  *   - `isRendered(index)`: 判断指定索引的消息是否应该渲染完整内容
- *   - `handleScroll`: 绑定到滚动容器的 onScroll 回调
+ *   - `handleScroll`: 绑定到滚动容器的 onScroll 回调（已内置 rAF 节流）
  *   - `scrollToBottom`: 手动滚动到底部（在初始渲染完成后调用）
  */
 export function useProgressiveRender(
@@ -125,6 +132,9 @@ export function useProgressiveRender(
 
   /** 上次 flush 后累积的新增渲染数 */
   const pendingCountRef = useRef(0);
+
+  /** rAF 节流标记：非零表示有待处理的帧回调 */
+  const scrollRafRef = useRef(0);
 
   /**
    * 初始化：totalCount 变化时，设定初始渲染区间（列表末尾 INITIAL_BATCH 条）
@@ -230,10 +240,12 @@ export function useProgressiveRender(
   );
 
   /**
-   * 滚动事件处理：二分查找视口中心对应的消息索引，
+   * 滚动实际处理逻辑（由 rAF 节流后调用）。
+   *
+   * 二分查找视口中心对应的消息索引，
    * 如果该索引未渲染则立即渲染一批并 bump version。
    */
-  const handleScroll = useCallback(() => {
+  const doScrollWork = useCallback(() => {
     const container = scrollContainerRef.current;
     if (!container || totalCount === 0) return;
 
@@ -273,6 +285,20 @@ export function useProgressiveRender(
   }, [scrollContainerRef, totalCount]);
 
   /**
+   * 滚动事件处理（rAF 节流）。
+   *
+   * 浏览器 onScroll 以 60fps+ 触发，但 querySelectorAll + offsetTop 读取
+   * 会引起布局抖动（layout thrashing）。使用 rAF 确保每帧最多执行一次。
+   */
+  const handleScroll = useCallback(() => {
+    if (scrollRafRef.current) return;
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = 0;
+      doScrollWork();
+    });
+  }, [doScrollWork]);
+
+  /**
    * 滚动到底部。
    *
    * 使用轮询策略确保在 React 渲染 + 浏览器布局完成后再滚动：
@@ -300,14 +326,12 @@ export function useProgressiveRender(
       attempts++;
 
       if (stableFrames >= 2 || attempts >= maxAttempts) {
-        // 布局已稳定或超时，立即滚动到底部
         el.scrollTop = currentHeight;
       } else {
         requestAnimationFrame(poll);
       }
     };
 
-    // 首帧延迟，确保 React commit 后的 state 更新已处理
     requestAnimationFrame(poll);
   }, [scrollContainerRef]);
 
