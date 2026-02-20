@@ -8,9 +8,13 @@
  * - tool_result：工具结果块 → 委托给 ToolResultRenderer（折叠 + 打开文件位置）
  * - thinking：AI 思考过程块（默认折叠，斜体淡色显示）
  * - image：图片内容块（通过 Base64 data URI 渲染）
+ *
+ * 性能优化：
+ * - 使用 React.memo 包裹，props 不变时跳过重渲染
+ * - 移除 framer-motion（motion.div），使用纯 CSS 动画，零 JS 开销
  */
 
-import { motion } from 'motion/react';
+import { memo } from 'react';
 import { Lightbulb } from 'lucide-react';
 import type { MessageContent, ToolUseInfo } from '../types/claude';
 import { ToolUseRenderer } from './ToolUseRenderer';
@@ -30,30 +34,29 @@ interface MessageContentRendererProps {
 }
 
 /**
- * MessageContentRenderer - 单个消息内容块的渲染组件
+ * MessageContentRenderer - 单个消息内容块的渲染组件（React.memo 优化）
  *
  * 根据 block.type 分发到不同的渲染逻辑：
- * - text: 保留空白符的预格式化文本
+ * - text: Markdown 渲染（通过 MarkdownRenderer）
  * - tool_use: 委托给 ToolUseRenderer（紧凑显示 + Raw 切换）
  * - tool_result: 委托给 ToolResultRenderer（折叠 + 打开文件位置）
  * - thinking: 默认折叠 + 斜体淡色
  * - image: 内联图片展示
  *
+ * 所有入场动画使用 CSS @keyframes（animate-msg-in / animate-scale-in），
+ * 不引入 framer-motion，由浏览器合成线程执行，不阻塞主线程。
+ *
  * @param props - 包含待渲染的内容块对象
  * @returns 渲染后的 JSX 元素
  */
-export function MessageContentRenderer({ block, projectPath, toolUseMap }: MessageContentRendererProps) {
+export const MessageContentRenderer = memo(function MessageContentRenderer({ block, projectPath, toolUseMap }: MessageContentRendererProps) {
   switch (block.type) {
     /* ====== 文本内容块（Markdown 渲染） ====== */
     case 'text':
       return (
-        <motion.div
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.2 }}
-        >
+        <div className="animate-msg-in">
           <MarkdownRenderer content={block.text || ''} />
-        </motion.div>
+        </div>
       );
 
     /* ====== 工具调用块 → 委托给 ToolUseRenderer ====== */
@@ -79,24 +82,14 @@ export function MessageContentRenderer({ block, projectPath, toolUseMap }: Messa
     /* ====== 思考过程块 ====== */
     case 'thinking':
       return (
-        <motion.details
-          className="thinking-block content-block"
-          initial={{ opacity: 0, scale: 0.98 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ duration: 0.2 }}
-        >
+        <details className="thinking-block content-block animate-scale-in">
           <summary className="cursor-pointer select-none text-sm">
             <Lightbulb className="w-4 h-4 inline-block shrink-0" /> 思考过程
           </summary>
-          <motion.div
-            className="mt-2 italic opacity-70"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ duration: 0.15, delay: 0.05 }}
-          >
+          <div className="mt-2 italic opacity-70">
             <MarkdownRenderer content={block.thinking || block.text || ''} />
-          </motion.div>
-        </motion.details>
+          </div>
+        </details>
       );
 
     /* ====== 图片内容块 ====== */
@@ -104,19 +97,14 @@ export function MessageContentRenderer({ block, projectPath, toolUseMap }: Messa
       if (block.source?.data && block.source?.media_type) {
         const dataUri = `data:${block.source.media_type};base64,${block.source.data}`;
         return (
-          <motion.div
-            className="image-block"
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ duration: 0.25 }}
-          >
+          <div className="image-block animate-scale-in">
             <img
               src={dataUri}
               alt="消息图片"
               className="max-w-full rounded-lg shadow-sm"
               loading="lazy"
             />
-          </motion.div>
+          </div>
         );
       }
       return (
@@ -133,4 +121,4 @@ export function MessageContentRenderer({ block, projectPath, toolUseMap }: Messa
         </pre>
       );
   }
-}
+});

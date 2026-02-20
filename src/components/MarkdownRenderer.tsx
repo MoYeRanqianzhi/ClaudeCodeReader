@@ -9,9 +9,14 @@
  * - 行内代码（`）：紫色背景标签样式
  * - 链接（[text](url)）：禁用点击（桌面查看器，非浏览器）
  * - 其他元素：通过 CSS 类 `.markdown-body` 统一控制排版
+ *
+ * 性能优化：
+ * - React.memo 包裹：content（string 原始值）相同时跳过整个 react-markdown 解析流程。
+ *   react-markdown 内部会将 Markdown 文本经 remark → rehype → React 元素 的三阶段转换，
+ *   每次重渲染都需完整执行，是编辑场景下最昂贵的操作。memo 可彻底避免。
  */
 
-import { useMemo } from 'react';
+import { memo, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -29,12 +34,15 @@ interface MarkdownRendererProps {
 const remarkPlugins = [remarkGfm];
 
 /**
- * MarkdownRenderer - 将 Markdown 文本渲染为格式化 HTML
+ * MarkdownRenderer - 将 Markdown 文本渲染为格式化 HTML（React.memo 优化）
+ *
+ * React.memo 对 content（string 原始值）使用 === 比较，
+ * 相同文本直接跳过 remark → rehype → React 的完整解析管线。
  *
  * @param props - 包含 Markdown 文本和可选类名
  * @returns 渲染后的 JSX 元素
  */
-export function MarkdownRenderer({ content, className = '' }: MarkdownRendererProps) {
+export const MarkdownRenderer = memo(function MarkdownRenderer({ content, className = '' }: MarkdownRendererProps) {
   // 自定义组件映射（稳定引用）
   const components = useMemo(() => ({
     /**
@@ -105,4 +113,4 @@ export function MarkdownRenderer({ content, className = '' }: MarkdownRendererPr
       </ReactMarkdown>
     </div>
   );
-}
+});
