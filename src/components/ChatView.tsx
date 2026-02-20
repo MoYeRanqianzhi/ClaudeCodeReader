@@ -162,59 +162,34 @@ function CompactSummaryBlock({
 /**
  * SystemMessageBlock - 系统消息的专用渲染组件
  *
- * 以紧凑的折叠卡片形式展示 Claude Code CLI 自动注入的系统消息，
- * 根据 systemLabel 显示不同的图标和标签文字：
- * - '技能'：灯泡图标，标签"技能"
- * - '计划'：文件图标，标签"计划"，折叠态显示 H1 标题，跳转按钮始终可见
- * - '系统'：终端图标，标签"系统"（默认）
+ * 以紧凑的折叠卡片形式展示 Claude Code CLI 自动注入的系统消息。
+ *
+ * 计划消息特殊布局（单一卡片，非两块分离）：
+ * - 折叠态：📄 计划 + H1 标题 + [↗ 源会话] + [▼]
+ * - 展开态：上方同上 + 分割线 + 纯计划 Markdown（无模板文本）
+ *
+ * 技能/系统消息保持原有紧凑折叠行为。
  */
 function SystemMessageBlock({
   msg,
   projectPath,
   toolUseMap,
-  currentSession,
-  projects,
   onNavigateToSession,
 }: {
   msg: DisplayMessage;
   projectPath: string;
   toolUseMap: Record<string, ToolUseInfo>;
-  /** 当前选中的会话，用于判断引用的会话是否为当前会话 */
-  currentSession: Session | null;
-  /** 所有项目列表，用于判断引用的会话是否存在 */
-  projects: Project[];
   /** 跳转到指定会话的回调 */
   onNavigateToSession: (encodedProject: string, sessionId: string) => Promise<boolean>;
 }) {
   const [expanded, setExpanded] = useState(false);
 
-  // 根据 systemLabel 选择图标和标签文字
   const label = msg.systemLabel || '系统';
   const isPlan = label === '计划';
   const IconComponent = label === '技能' ? Lightbulb : isPlan ? FileText : Terminal;
 
-  // 计划消息：解析源会话信息（仅当有 planSourcePath 时）
-  const planInfo = useMemo(() => {
-    if (!msg.planSourcePath) return null;
-    return parseJsonlPath(msg.planSourcePath);
-  }, [msg.planSourcePath]);
-
-  // 判断计划引用的会话状态
-  const planSessionStatus = useMemo(() => {
-    if (!planInfo) return null;
-    if (currentSession && planInfo.sessionId === currentSession.id) {
-      return 'current' as const;
-    }
-    const targetProject = projects.find(p => p.name === planInfo.encodedProject);
-    if (!targetProject) return 'not_found' as const;
-    const targetSession = targetProject.sessions.find(s => s.id === planInfo.sessionId);
-    if (!targetSession) return 'not_found' as const;
-    return 'navigable' as const;
-  }, [planInfo, currentSession, projects]);
-
   /**
-   * 计划消息：提取第一个 H1 标题作为折叠态预览文本
-   * 例如 "# Build User Auth System" → "Build User Auth System"
+   * 计划消息：提取第一个 H1 标题作为折叠态预览
    */
   const planTitle = useMemo(() => {
     if (!isPlan) return null;
@@ -228,86 +203,123 @@ function SystemMessageBlock({
   }, [msg.content, isPlan]);
 
   /**
-   * 计划消息：清理内容，剥离固定模板文本。
+   * 计划消息：清理内容，剥离固定模板文本 + 过滤空块。
    *
-   * 移除的模板：
-   * - 头部：`Implement the following plan:\n\n`
-   * - 尾部：`If you need specific details ... read the full transcript at: xxx.jsonl`
-   *
-   * 保留中间的纯计划 Markdown 内容。
+   * 移除：
+   * - 头部 "Implement the following plan:\n\n"
+   * - 尾部 "If you need specific details ... read the full transcript at: xxx.jsonl"
+   * - 清理后为空的文本块
    */
   const cleanedContent = useMemo(() => {
     if (!isPlan) return msg.content;
-    return msg.content.map(block => {
-      if (block.type !== 'text' || !block.text) return block;
-      let text = block.text;
-      // 移除头部固定模板
-      text = text.replace(/^Implement the following plan:\s*\n*/i, '');
-      // 移除尾部固定模板（从 "If you need specific details" 或 "read the full transcript at:" 到末尾）
-      const transcriptIdx = text.lastIndexOf('read the full transcript at:');
-      if (transcriptIdx !== -1) {
-        // 查找该段落的起始位置（向前找空行）
-        let paraStart = text.lastIndexOf('\n\n', transcriptIdx);
-        if (paraStart === -1) paraStart = transcriptIdx;
-        text = text.substring(0, paraStart);
-      }
-      return { ...block, text: text.trim() };
-    });
+    return msg.content
+      .map(block => {
+        if (block.type !== 'text' || !block.text) return block;
+        let text = block.text;
+        // 移除头部固定模板（兼容可能存在的额外空白）
+        text = text.replace(/^Implement the following plan:\s*/i, '');
+        // 移除尾部固定模板
+        const transcriptIdx = text.lastIndexOf('read the full transcript at:');
+        if (transcriptIdx !== -1) {
+          let paraStart = text.lastIndexOf('\n\n', transcriptIdx);
+          if (paraStart === -1) paraStart = transcriptIdx;
+          text = text.substring(0, paraStart);
+        }
+        text = text.trim();
+        return { ...block, text };
+      })
+      // 过滤掉清理后变空的文本块（避免空白占位）
+      .filter(block => !(block.type === 'text' && (!block.text || block.text.trim() === '')));
   }, [msg.content, isPlan]);
 
-  return (
-    <div>
-      {/* 计划消息头部栏：标签 + 标题 + 跳转按钮 + 展开/收起（始终可见） */}
-      <div
-        className={`flex items-center gap-2 px-3 py-1.5 rounded-lg select-none
-                    bg-muted/40 border border-border/40 hover:bg-muted/60 transition-colors text-xs text-muted-foreground
-                    ${isPlan ? '' : 'inline-flex cursor-pointer'}`}
-        onClick={isPlan ? undefined : () => setExpanded(!expanded)}
-        title={isPlan ? undefined : (expanded ? `收起${label}消息` : `展开${label}消息`)}
-      >
-        {/* 左侧：图标 + 标签 + 计划标题（可点击展开） */}
+  /**
+   * 跳转按钮点击：解析路径并导航
+   * 直接从 msg.planSourcePath 解析，不依赖 planInfo/planSessionStatus 中间状态
+   */
+  const handleJumpToSource = useCallback(() => {
+    if (!msg.planSourcePath) return;
+    const info = parseJsonlPath(msg.planSourcePath);
+    if (info) {
+      onNavigateToSession(info.encodedProject, info.sessionId);
+    }
+  }, [msg.planSourcePath, onNavigateToSession]);
+
+  // ==================== 计划消息：单一卡片布局 ====================
+  if (isPlan) {
+    return (
+      <div className="rounded-xl border border-border/50 bg-muted/30 overflow-hidden">
+        {/* 头部栏：图标 + 标题 + 跳转按钮 + 展开/收起 */}
         <div
-          className={`flex items-center gap-1.5 min-w-0 ${isPlan ? 'cursor-pointer flex-1' : ''}`}
-          onClick={isPlan ? () => setExpanded(!expanded) : undefined}
-          title={isPlan ? (expanded ? '收起计划内容' : '展开计划内容') : undefined}
+          className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground cursor-pointer
+                     hover:bg-muted/50 transition-colors select-none"
+          onClick={() => setExpanded(!expanded)}
         >
-          <IconComponent className="w-3 h-3 shrink-0" />
-          <span className="font-medium shrink-0">{label}</span>
-          {/* 计划消息：显示 H1 标题 */}
-          {isPlan && planTitle && (
-            <span className="text-foreground/80 font-medium truncate">
+          <FileText className="w-3.5 h-3.5 shrink-0 text-primary/70" />
+          <span className="font-medium shrink-0">计划</span>
+          {planTitle && (
+            <span className="text-foreground/80 font-medium truncate min-w-0">
               {planTitle}
             </span>
           )}
-          {!isPlan && (
-            <span className="opacity-60">{formatTimestamp(msg.timestamp)}</span>
+          {/* 弹簧间距：将后续元素推到右侧 */}
+          <div className="flex-1" />
+          {/* 跳转按钮（始终可见，只要有 planSourcePath） */}
+          {msg.planSourcePath && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                handleJumpToSource();
+              }}
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md shrink-0
+                         bg-primary/10 text-primary hover:bg-primary/20 transition-colors text-xs font-medium"
+              title="跳转到源会话"
+            >
+              <ExternalLink className="w-3 h-3" />
+              源会话
+            </button>
           )}
-          {expanded ? <ChevronUp className="w-3 h-3 shrink-0" /> : <ChevronDown className="w-3 h-3 shrink-0" />}
+          {expanded
+            ? <ChevronUp className="w-3.5 h-3.5 shrink-0" />
+            : <ChevronDown className="w-3.5 h-3.5 shrink-0" />}
         </div>
 
-        {/* 右侧：计划消息的跳转按钮（始终可见，不在折叠内） */}
-        {isPlan && planInfo && planSessionStatus !== 'current' && (
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onNavigateToSession(planInfo.encodedProject, planInfo.sessionId);
-            }}
-            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md shrink-0
-                       bg-primary/10 text-primary hover:bg-primary/20 transition-colors text-xs font-medium"
-            title={`跳转到源会话 ${planInfo.sessionId.substring(0, 8)}`}
-          >
-            <ExternalLink className="w-3 h-3" />
-            源会话
-          </button>
-        )}
-        {isPlan && planInfo && planSessionStatus === 'current' && (
-          <span className="px-2 py-0.5 rounded-full bg-primary/10 text-primary text-xs font-medium shrink-0">
-            当前会话
-          </span>
-        )}
+        {/* 展开区域：分割线 + 计划内容（同一卡片内） */}
+        <AnimatePresence initial={false}>
+          {expanded && (
+            <motion.div
+              key="plan-content"
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: 'auto', opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={COMPACT_EXPAND_TRANSITION}
+              style={{ overflow: 'hidden' }}
+            >
+              <div className="border-t border-border/50" />
+              <div className="px-4 py-3 prose prose-sm dark:prose-invert max-w-none">
+                <MessageBlockList content={cleanedContent} projectPath={projectPath} toolUseMap={toolUseMap} />
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+    );
+  }
+
+  // ==================== 技能/系统消息：原有紧凑行为 ====================
+  return (
+    <div>
+      <div
+        className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg cursor-pointer select-none
+                    bg-muted/40 border border-border/40 hover:bg-muted/60 transition-colors text-xs text-muted-foreground"
+        onClick={() => setExpanded(!expanded)}
+        title={expanded ? `收起${label}消息` : `展开${label}消息`}
+      >
+        <IconComponent className="w-3 h-3" />
+        <span className="font-medium">{label}</span>
+        <span className="opacity-60">{formatTimestamp(msg.timestamp)}</span>
+        {expanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
       </div>
 
-      {/* 展开内容区域 */}
       <AnimatePresence initial={false}>
         {expanded && (
           <motion.div
@@ -320,12 +332,7 @@ function SystemMessageBlock({
           >
             <div className="rounded-xl p-4 mt-1.5 bg-muted/30 border border-border/50">
               <div className="prose prose-sm dark:prose-invert max-w-none">
-                {/* 计划消息使用清理后的内容（无模板文本），其他系统消息使用原始内容 */}
-                <MessageBlockList
-                  content={isPlan ? cleanedContent : msg.content}
-                  projectPath={projectPath}
-                  toolUseMap={toolUseMap}
-                />
+                <MessageBlockList content={msg.content} projectPath={projectPath} toolUseMap={toolUseMap} />
               </div>
             </div>
           </motion.div>
@@ -381,7 +388,8 @@ export function ChatView({
   onToggleSelectionMode,
   sidebarCollapsed,
   onExpandSidebar,
-  projects,
+  // projects 保留在接口中但组件内不再直接使用（跳转按钮改为延迟解析路径）
+  projects: _projects,
   navBackTarget,
   onNavigateBack,
   onNavigateToSession,
@@ -932,8 +940,6 @@ export function ChatView({
                     msg={msg}
                     projectPath={projectPath}
                     toolUseMap={toolUseMap}
-                    currentSession={session}
-                    projects={projects}
                     onNavigateToSession={onNavigateToSession}
                   />
                 ) :
