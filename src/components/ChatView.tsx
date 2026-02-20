@@ -286,28 +286,24 @@ function SystemMessageBlock({
         </div>
 
         {/* 右侧：计划消息的跳转按钮（始终可见，不在折叠内） */}
-        {isPlan && planInfo && (
-          <>
-            {planSessionStatus === 'navigable' && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onNavigateToSession(planInfo.encodedProject, planInfo.sessionId);
-                }}
-                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md shrink-0
-                           bg-primary/10 text-primary hover:bg-primary/20 transition-colors text-xs font-medium"
-                title="跳转到源会话"
-              >
-                <ExternalLink className="w-3 h-3" />
-                源会话
-              </button>
-            )}
-            {planSessionStatus === 'current' && (
-              <span className="px-2 py-0.5 rounded-full bg-primary/10 text-primary text-xs font-medium shrink-0">
-                当前会话
-              </span>
-            )}
-          </>
+        {isPlan && planInfo && planSessionStatus !== 'current' && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onNavigateToSession(planInfo.encodedProject, planInfo.sessionId);
+            }}
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md shrink-0
+                       bg-primary/10 text-primary hover:bg-primary/20 transition-colors text-xs font-medium"
+            title={`跳转到源会话 ${planInfo.sessionId.substring(0, 8)}`}
+          >
+            <ExternalLink className="w-3 h-3" />
+            源会话
+          </button>
+        )}
+        {isPlan && planInfo && planSessionStatus === 'current' && (
+          <span className="px-2 py-0.5 rounded-full bg-primary/10 text-primary text-xs font-medium shrink-0">
+            当前会话
+          </span>
         )}
       </div>
 
