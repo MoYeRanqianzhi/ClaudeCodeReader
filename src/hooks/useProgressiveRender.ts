@@ -274,16 +274,41 @@ export function useProgressiveRender(
 
   /**
    * 滚动到底部。
-   * 使用双 requestAnimationFrame 确保浏览器已完成布局后再设置 scrollTop。
+   *
+   * 使用轮询策略确保在 React 渲染 + 浏览器布局完成后再滚动：
+   * 1. 首次调用 rAF 等待当前帧布局完成
+   * 2. 连续检查 scrollHeight 是否稳定（两帧相同即视为布局完成）
+   * 3. 最多轮询 10 帧（约 160ms），防止无限等待
    */
   const scrollToBottom = useCallback(() => {
     const el = scrollContainerRef.current;
     if (!el) return;
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        el.scrollTop = el.scrollHeight;
-      });
-    });
+
+    let lastHeight = 0;
+    let stableFrames = 0;
+    let attempts = 0;
+    const maxAttempts = 10;
+
+    const poll = () => {
+      const currentHeight = el.scrollHeight;
+      if (currentHeight === lastHeight && currentHeight > 0) {
+        stableFrames++;
+      } else {
+        stableFrames = 0;
+      }
+      lastHeight = currentHeight;
+      attempts++;
+
+      if (stableFrames >= 2 || attempts >= maxAttempts) {
+        // 布局已稳定或超时，立即滚动到底部
+        el.scrollTop = currentHeight;
+      } else {
+        requestAnimationFrame(poll);
+      }
+    };
+
+    // 首帧延迟，确保 React commit 后的 state 更新已处理
+    requestAnimationFrame(poll);
   }, [scrollContainerRef]);
 
   return { isRendered, handleScroll, scrollToBottom };

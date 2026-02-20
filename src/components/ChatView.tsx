@@ -875,7 +875,6 @@ export function ChatView({
             <div
               key={msg.displayId}
               data-msg-index={index}
-              style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 100px' }}
             >
               {isRendered(index) ? (
                 /* ====== 已渲染：完整消息内容 ====== */
@@ -1105,11 +1104,8 @@ export function ChatView({
               )}
             </motion.div>
               ) : (
-                /* ====== 未渲染：轻量占位符 ====== */
-                <div
-                  style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 60px' }}
-                  className="min-h-[60px]"
-                />
+                /* ====== 未渲染：轻量占位符（固定高度，确保 scrollHeight 稳定） ====== */
+                <div className="h-[60px]" />
               )}
             </div>
           ))
