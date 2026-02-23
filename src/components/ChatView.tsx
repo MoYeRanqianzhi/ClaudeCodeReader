@@ -116,23 +116,25 @@ function CompactSummaryBlock({
    * - 手动展开：导航离开时保持展开
    */
   const wasAutoExpandedRef = useRef(false);
+  /** 上一次 searchAutoExpand 的值，用于检测变化 */
+  const prevSearchAutoExpandRef = useRef(false);
 
-  // 搜索导航自动展开/收起
-  useEffect(() => {
+  // 渲染期间同步派生状态（React 推荐模式，比 useEffect 更可靠）
+  // 在 render 阶段检测 prop 变化并立即更新 state，避免 useEffect 的异步时序问题
+  if ((searchAutoExpand ?? false) !== prevSearchAutoExpandRef.current) {
+    prevSearchAutoExpandRef.current = searchAutoExpand ?? false;
     if (searchAutoExpand) {
-      // 搜索导航到此消息：如果当前未展开，自动展开
       if (!expanded) {
         setExpanded(true);
         wasAutoExpandedRef.current = true;
       }
     } else {
-      // 搜索导航离开此消息：仅当是自动展开时才自动收起
       if (wasAutoExpandedRef.current) {
         setExpanded(false);
         wasAutoExpandedRef.current = false;
       }
     }
-  }, [searchAutoExpand]); // 故意不依赖 expanded，避免手动操作触发此 effect
+  }
 
   /** 手动点击切换：标记为非自动展开，搜索导航离开时不会自动收起 */
   const handleManualToggle = useCallback(() => {
@@ -232,9 +234,11 @@ function SystemMessageBlock({
   const [expanded, setExpanded] = useState(false);
   /** 标记当前展开是否由搜索导航自动触发 */
   const wasAutoExpandedRef = useRef(false);
+  const prevSearchAutoExpandRef = useRef(false);
 
-  // 搜索导航自动展开/收起
-  useEffect(() => {
+  // 渲染期间同步派生状态
+  if ((searchAutoExpand ?? false) !== prevSearchAutoExpandRef.current) {
+    prevSearchAutoExpandRef.current = searchAutoExpand ?? false;
     if (searchAutoExpand) {
       if (!expanded) {
         setExpanded(true);
@@ -246,7 +250,7 @@ function SystemMessageBlock({
         wasAutoExpandedRef.current = false;
       }
     }
-  }, [searchAutoExpand]);
+  }
 
   /** 手动点击切换 */
   const handleManualToggle = useCallback(() => {
@@ -772,7 +776,6 @@ export function ChatView({
     const targetDisplayId = navSearchMatchIds[currentMatchIndex];
     const targetMsg = visibleMessages.find(msg => msg.displayId === targetDisplayId);
     if (!targetMsg) return;
-    // 找到在 visibleMessages 中的索引
     const targetIdx = visibleMessages.indexOf(targetMsg);
 
     // 1. 确保目标消息已渲染
@@ -782,24 +785,31 @@ export function ChatView({
     const isCollapsible = targetMsg.displayType === 'compact_summary' || targetMsg.displayType === 'system';
     setSearchAutoExpandId(isCollapsible ? targetDisplayId : null);
 
-    // 3. 滚动到目标消息 + 闪烁
-    //    如果是折叠消息，延迟 300ms 等待展开动画完成后再滚动，确保定位准确
-    const scrollDelay = isCollapsible ? 300 : 0;
-    const scrollTimer = setTimeout(() => {
-      requestAnimationFrame(() => {
-        const el = scrollContainerRef.current?.querySelector(`[data-msg-index="${targetIdx}"]`);
-        if (el) {
-          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }
-        // 触发闪烁
-        setFlashingId(targetDisplayId);
-      });
-    }, scrollDelay);
+    // 3. 滚动 + 闪烁
+    const doScrollAndFlash = () => {
+      const el = scrollContainerRef.current?.querySelector(`[data-msg-index="${targetIdx}"]`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+      setFlashingId(targetDisplayId);
+    };
+
+    // 折叠消息：延迟 300ms 等展开动画完成再滚动
+    // 非折叠消息：直接 rAF（恢复原始行为，不包 setTimeout）
+    let scrollTimer: ReturnType<typeof setTimeout> | null = null;
+    if (isCollapsible) {
+      scrollTimer = setTimeout(() => {
+        requestAnimationFrame(doScrollAndFlash);
+      }, 300);
+    } else {
+      requestAnimationFrame(doScrollAndFlash);
+    }
 
     // 4. 1 秒后清除闪烁
-    const flashTimer = setTimeout(() => setFlashingId(null), 1000 + scrollDelay);
+    const flashDelay = isCollapsible ? 1300 : 1000;
+    const flashTimer = setTimeout(() => setFlashingId(null), flashDelay);
     return () => {
-      clearTimeout(scrollTimer);
+      if (scrollTimer) clearTimeout(scrollTimer);
       clearTimeout(flashTimer);
     };
   }, [currentMatchIndex, navSearchMatchIds, visibleMessages, forceRenderIndex]);
