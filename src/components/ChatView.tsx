@@ -149,6 +149,7 @@ function CompactSummaryBlock({
   return (
     <motion.div
       key={msg.displayId}
+      data-flash-target
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       transition={{ duration: 0.2 }}
@@ -323,7 +324,7 @@ function SystemMessageBlock({
   // ==================== 计划消息：单一卡片布局 ====================
   if (isPlan) {
     return (
-      <div className="rounded-xl border border-border/50 bg-muted/30 overflow-hidden">
+      <div data-flash-target className="rounded-xl border border-border/50 bg-muted/30 overflow-hidden">
         {/* 头部栏：图标 + 标题 + 跳转按钮 + 展开/收起 */}
         <div
           className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground cursor-pointer
@@ -383,7 +384,7 @@ function SystemMessageBlock({
 
   // ==================== 技能/系统消息：原有紧凑行为 ====================
   return (
-    <div>
+    <div data-flash-target>
       <div
         className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg cursor-pointer select-none
                     bg-muted/40 border border-border/40 hover:bg-muted/60 transition-colors text-xs text-muted-foreground"
@@ -503,8 +504,12 @@ export function ChatView({
   const [navSearchResultSet, setNavSearchResultSet] = useState<Set<string>>(new Set());
   /** 当前定位到第几个匹配（-1 表示无匹配） */
   const [currentMatchIndex, setCurrentMatchIndex] = useState(-1);
-  /** 正在闪烁的消息 displayId（用于 search-flash CSS 类） */
-  const [flashingId, setFlashingId] = useState<string | null>(null);
+  /**
+   * 闪烁动画清理函数 ref。
+   * 闪烁通过直接 DOM 操作（classList.add/remove）实现，
+   * 完全脱离 React 渲染周期，避免重渲染重启 CSS 动画。
+   */
+  const flashCleanupRef = useRef<(() => void) | null>(null);
   /**
    * 搜索导航自动展开的消息 displayId。
    * 当搜索导航跳转到折叠消息（compact_summary / system）时设置，
@@ -756,7 +761,11 @@ export function ChatView({
     searchRequestIdRef.current++;
     setNavSearchResultSet(new Set());
     setCurrentMatchIndex(-1);
-    setFlashingId(null);
+    // 清除闪烁动画（直接 DOM 操作）
+    if (flashCleanupRef.current) {
+      flashCleanupRef.current();
+      flashCleanupRef.current = null;
+    }
     setSearchAutoExpandId(null);
     setSearchHighlight(undefined);
     navSearchBarRef.current?.reset();
@@ -766,8 +775,17 @@ export function ChatView({
    * 导航跳转 + 闪烁效果 + 自动展开折叠消息：
    * currentMatchIndex 变化时，自动滚动到目标消息并触发闪烁动画。
    * 如果目标消息是折叠类型（compact_summary / system），自动展开。
+   *
+   * 闪烁动画使用直接 DOM 操作（classList.add/remove），
+   * 完全脱离 React 渲染周期，避免 setState 触发重渲染导致 CSS 动画重启。
    */
   useEffect(() => {
+    // 先清理上一次的闪烁
+    if (flashCleanupRef.current) {
+      flashCleanupRef.current();
+      flashCleanupRef.current = null;
+    }
+
     if (currentMatchIndex < 0 || currentMatchIndex >= navSearchMatchIds.length) {
       // 无匹配时清除自动展开
       setSearchAutoExpandId(null);
@@ -785,17 +803,38 @@ export function ChatView({
     const isCollapsible = targetMsg.displayType === 'compact_summary' || targetMsg.displayType === 'system';
     setSearchAutoExpandId(isCollapsible ? targetDisplayId : null);
 
-    // 3. 滚动 + 闪烁
+    // 3. 滚动 + 闪烁（直接 DOM 操作，不触发 React 重渲染）
     const doScrollAndFlash = () => {
-      const el = scrollContainerRef.current?.querySelector(`[data-msg-index="${targetIdx}"]`);
-      if (el) {
-        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }
-      setFlashingId(targetDisplayId);
+      const wrapper = scrollContainerRef.current?.querySelector(`[data-msg-index="${targetIdx}"]`);
+      if (!wrapper) return;
+
+      // 滚动到目标消息
+      wrapper.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+      // 查找闪烁目标元素：优先找内部带 data-flash-target 的元素，否则用 wrapper 自身
+      const flashTarget = wrapper.querySelector('[data-flash-target]') as HTMLElement | null ?? wrapper as HTMLElement;
+
+      // 直接 DOM 操作添加闪烁 class
+      flashTarget.classList.remove('search-flash');
+      // 强制浏览器 reflow，确保移除后重新添加能重启动画
+      void flashTarget.offsetWidth;
+      flashTarget.classList.add('search-flash');
+
+      // animationend 事件自动清除 class（比 setTimeout 更精确）
+      const handleAnimEnd = () => {
+        flashTarget.classList.remove('search-flash');
+      };
+      flashTarget.addEventListener('animationend', handleAnimEnd, { once: true });
+
+      // 保存清理函数，供下次导航或关闭搜索时调用
+      flashCleanupRef.current = () => {
+        flashTarget.classList.remove('search-flash');
+        flashTarget.removeEventListener('animationend', handleAnimEnd);
+      };
     };
 
     // 折叠消息：延迟 300ms 等展开动画完成再滚动
-    // 非折叠消息：直接 rAF（恢复原始行为，不包 setTimeout）
+    // 非折叠消息：直接 rAF
     let scrollTimer: ReturnType<typeof setTimeout> | null = null;
     if (isCollapsible) {
       scrollTimer = setTimeout(() => {
@@ -805,12 +844,8 @@ export function ChatView({
       requestAnimationFrame(doScrollAndFlash);
     }
 
-    // 4. 1 秒后清除闪烁
-    const flashDelay = isCollapsible ? 1300 : 1000;
-    const flashTimer = setTimeout(() => setFlashingId(null), flashDelay);
     return () => {
       if (scrollTimer) clearTimeout(scrollTimer);
-      clearTimeout(flashTimer);
     };
   }, [currentMatchIndex, navSearchMatchIds, visibleMessages, forceRenderIndex]);
 
@@ -1293,13 +1328,14 @@ export function ChatView({
                   />
                 ) :
             <div
+              data-flash-target
               className={`rounded-xl p-4 message-bubble animate-msg-in ${
                 msg.displayType === 'user'
                   ? 'bg-primary/5 border border-primary/10'
                   : msg.displayType === 'tool_result'
                     ? 'bg-emerald-500/5 border border-emerald-500/10'
                     : 'bg-muted/50 border border-border'
-              } ${selectionMode && selectedMessages.has(msg.sourceUuid) ? 'ring-2 ring-primary' : ''} ${flashingId === msg.displayId ? 'search-flash' : ''}`}
+              } ${selectionMode && selectedMessages.has(msg.sourceUuid) ? 'ring-2 ring-primary' : ''}`}
               onClick={selectionMode ? () => onToggleSelect(msg.sourceUuid) : undefined}
               style={selectionMode ? { cursor: 'pointer' } : undefined}
             >
