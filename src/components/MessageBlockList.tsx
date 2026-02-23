@@ -16,7 +16,7 @@
  */
 
 import { memo } from 'react';
-import type { MessageContent, ToolUseInfo } from '../types/claude';
+import type { MessageContent, ToolUseInfo, SearchHighlight } from '../types/claude';
 import { MessageContentRenderer } from './MessageContentRenderer';
 
 /**
@@ -29,6 +29,13 @@ interface MessageBlockListProps {
   projectPath: string;
   /** tool_use_id → ToolUseInfo 映射（Rust HashMap 序列化为 Record） */
   toolUseMap: Record<string, ToolUseInfo>;
+  /**
+   * 搜索高亮选项。
+   * 非空时，穿透到每个 MessageContentRenderer → MarkdownRenderer / ToolResultRenderer。
+   * 支持字面量（大小写敏感/不敏感）和正则表达式模式。
+   * undefined 时不传递，React.memo 可跳过重渲染。
+   */
+  searchHighlight?: SearchHighlight;
 }
 
 /**
@@ -43,7 +50,7 @@ interface MessageBlockListProps {
  * @param props - 包含待渲染的内容块数组和上下文信息
  * @returns 渲染后的 JSX 元素
  */
-export const MessageBlockList = memo(function MessageBlockList({ content, projectPath, toolUseMap }: MessageBlockListProps) {
+export const MessageBlockList = memo(function MessageBlockList({ content, projectPath, toolUseMap, searchHighlight }: MessageBlockListProps) {
   if (content.length === 0) {
     return (
       <div className="text-xs text-muted-foreground italic">
@@ -60,6 +67,7 @@ export const MessageBlockList = memo(function MessageBlockList({ content, projec
           block={block}
           projectPath={projectPath}
           toolUseMap={toolUseMap}
+          searchHighlight={searchHighlight}
         />
       ))}
     </div>

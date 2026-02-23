@@ -17,16 +17,17 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
-  ChevronRight, ChevronDown, ChevronUp, Search, X, CheckSquare, Square, Filter,
+  ChevronRight, ChevronDown, ChevronUp, X, CheckSquare, Square, Filter,
   Download, FileText, FileJson, RefreshCw, ArrowLeft,
-  Copy, Edit2, Trash2, Bot, User, Lightbulb, Wrench, Archive, Terminal, ExternalLink
+  Copy, Edit2, Trash2, Bot, User, Lightbulb, Wrench, Archive, Terminal, ExternalLink, Search
 } from 'lucide-react';
-import type { Session, Project, DisplayMessage, TransformedSession, ToolUseInfo } from '../types/claude';
+import type { Session, Project, DisplayMessage, TransformedSession, ToolUseInfo, SearchHighlight } from '../types/claude';
 import { formatTimestamp, searchSession } from '../utils/claudeData';
 import { parseJsonlPath } from '../utils/messageTransform';
 import { MessageBlockList } from './MessageBlockList';
 import { MessageContentRenderer } from './MessageContentRenderer';
 import { useProgressiveRender } from '../hooks/useProgressiveRender';
+import { NavSearchBar, type SearchRequest, type NavSearchBarHandle } from './NavSearchBar';
 
 /**
  * 可筛选的消息类型
@@ -96,12 +97,52 @@ function CompactSummaryBlock({
   msg,
   projectPath,
   toolUseMap,
+  searchHighlight,
+  searchAutoExpand,
 }: {
   msg: DisplayMessage;
   projectPath: string;
   toolUseMap: Record<string, ToolUseInfo>;
+  /** 搜索高亮选项，穿透到 MessageBlockList */
+  searchHighlight?: SearchHighlight;
+  /** 搜索导航自动展开信号：true 时自动展开，false 时自动收起（仅限自动展开的情况） */
+  searchAutoExpand?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
+  /**
+   * 标记当前展开是否由搜索导航自动触发。
+   * 用于区分自动展开和手动展开：
+   * - 自动展开：导航离开时自动收起
+   * - 手动展开：导航离开时保持展开
+   */
+  const wasAutoExpandedRef = useRef(false);
+
+  // 搜索导航自动展开/收起
+  useEffect(() => {
+    if (searchAutoExpand) {
+      // 搜索导航到此消息：如果当前未展开，自动展开
+      if (!expanded) {
+        setExpanded(true);
+        wasAutoExpandedRef.current = true;
+      }
+    } else {
+      // 搜索导航离开此消息：仅当是自动展开时才自动收起
+      if (wasAutoExpandedRef.current) {
+        setExpanded(false);
+        wasAutoExpandedRef.current = false;
+      }
+    }
+  }, [searchAutoExpand]); // 故意不依赖 expanded，避免手动操作触发此 effect
+
+  /** 手动点击切换：标记为非自动展开，搜索导航离开时不会自动收起 */
+  const handleManualToggle = useCallback(() => {
+    setExpanded(prev => {
+      const next = !prev;
+      // 手动操作后清除自动展开标记
+      wasAutoExpandedRef.current = false;
+      return next;
+    });
+  }, []);
 
   return (
     <motion.div
@@ -113,7 +154,7 @@ function CompactSummaryBlock({
       {/* 分割线：--已压缩-- */}
       <div
         className="flex items-center gap-3 cursor-pointer select-none py-1"
-        onClick={() => setExpanded(!expanded)}
+        onClick={handleManualToggle}
         title={expanded ? '收起压缩摘要' : '展开压缩摘要'}
       >
         <div className="flex-1 border-t border-teal-400/40" />
@@ -149,7 +190,7 @@ function CompactSummaryBlock({
               </div>
               {/* 摘要内容 */}
               <div className="prose prose-sm dark:prose-invert max-w-none">
-                <MessageBlockList content={msg.content} projectPath={projectPath} toolUseMap={toolUseMap} />
+                <MessageBlockList content={msg.content} projectPath={projectPath} toolUseMap={toolUseMap} searchHighlight={searchHighlight} />
               </div>
             </div>
           </motion.div>
@@ -175,14 +216,45 @@ function SystemMessageBlock({
   projectPath,
   toolUseMap,
   onNavigateToSession,
+  searchHighlight,
+  searchAutoExpand,
 }: {
   msg: DisplayMessage;
   projectPath: string;
   toolUseMap: Record<string, ToolUseInfo>;
   /** 跳转到指定会话的回调 */
   onNavigateToSession: (encodedProject: string, sessionId: string) => Promise<boolean>;
+  /** 搜索高亮选项，穿透到 MessageBlockList */
+  searchHighlight?: SearchHighlight;
+  /** 搜索导航自动展开信号 */
+  searchAutoExpand?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
+  /** 标记当前展开是否由搜索导航自动触发 */
+  const wasAutoExpandedRef = useRef(false);
+
+  // 搜索导航自动展开/收起
+  useEffect(() => {
+    if (searchAutoExpand) {
+      if (!expanded) {
+        setExpanded(true);
+        wasAutoExpandedRef.current = true;
+      }
+    } else {
+      if (wasAutoExpandedRef.current) {
+        setExpanded(false);
+        wasAutoExpandedRef.current = false;
+      }
+    }
+  }, [searchAutoExpand]);
+
+  /** 手动点击切换 */
+  const handleManualToggle = useCallback(() => {
+    setExpanded(prev => {
+      wasAutoExpandedRef.current = false;
+      return !prev;
+    });
+  }, []);
 
   const label = msg.systemLabel || '系统';
   const isPlan = label === '计划';
@@ -252,7 +324,7 @@ function SystemMessageBlock({
         <div
           className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground cursor-pointer
                      hover:bg-muted/50 transition-colors select-none"
-          onClick={() => setExpanded(!expanded)}
+          onClick={handleManualToggle}
         >
           <FileText className="w-3.5 h-3.5 shrink-0 text-primary/70" />
           <span className="font-medium shrink-0">计划</span>
@@ -296,7 +368,7 @@ function SystemMessageBlock({
             >
               <div className="border-t border-border/50" />
               <div className="px-4 py-3 prose prose-sm dark:prose-invert max-w-none">
-                <MessageBlockList content={cleanedContent} projectPath={projectPath} toolUseMap={toolUseMap} />
+                <MessageBlockList content={cleanedContent} projectPath={projectPath} toolUseMap={toolUseMap} searchHighlight={searchHighlight} />
               </div>
             </motion.div>
           )}
@@ -311,7 +383,7 @@ function SystemMessageBlock({
       <div
         className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg cursor-pointer select-none
                     bg-muted/40 border border-border/40 hover:bg-muted/60 transition-colors text-xs text-muted-foreground"
-        onClick={() => setExpanded(!expanded)}
+        onClick={handleManualToggle}
         title={expanded ? `收起${label}消息` : `展开${label}消息`}
       >
         <IconComponent className="w-3 h-3" />
@@ -332,7 +404,7 @@ function SystemMessageBlock({
           >
             <div className="rounded-xl p-4 mt-1.5 bg-muted/30 border border-border/50">
               <div className="prose prose-sm dark:prose-invert max-w-none">
-                <MessageBlockList content={msg.content} projectPath={projectPath} toolUseMap={toolUseMap} />
+                <MessageBlockList content={msg.content} projectPath={projectPath} toolUseMap={toolUseMap} searchHighlight={searchHighlight} />
               </div>
             </div>
           </motion.div>
@@ -405,16 +477,46 @@ export function ChatView({
    * 正在编辑的消息的原始 UUID（sourceUuid），用于提交编辑时定位原始消息。
    */
   const [editingSourceUuid, setEditingSourceUuid] = useState<string | null>(null);
-  /** 搜索关键词：输入后 debounce 300ms 发送到 Rust 后端搜索 */
-  const [searchQuery, setSearchQuery] = useState('');
-  /** 后端搜索结果：匹配的 display_id 集合。null 表示无搜索 */
-  const [searchResults, setSearchResults] = useState<Set<string> | null>(null);
+  /** 内容筛选搜索关键词（位于筛选器下拉菜单内），debounce 300ms 发送到 Rust 后端 */
+  const [filterSearchQuery, setFilterSearchQuery] = useState('');
+  /** 内容筛选后端搜索结果：匹配的 display_id 集合。null 表示无搜索 */
+  const [filterSearchResults, setFilterSearchResults] = useState<Set<string> | null>(null);
   /** 多选筛选器激活状态 */
   const [activeFilters, setActiveFilters] = useState<Set<FilterableType>>(new Set(ALL_FILTERS));
   /** 控制过滤器下拉菜单的显示/隐藏状态 */
   const [showFilterDropdown, setShowFilterDropdown] = useState(false);
   /** 控制导出下拉菜单的显示/隐藏状态 */
   const [showExportDropdown, setShowExportDropdown] = useState(false);
+
+  // ==================== VSCode 风格导航搜索状态 ====================
+  /** 导航搜索栏是否打开 */
+  const [navSearchOpen, setNavSearchOpen] = useState(false);
+  /**
+   * 导航搜索原始结果集（Rust 后端返回的匹配 displayId 集合）。
+   * 与 navSearchMatchIds 分离实现 stale-while-revalidate：
+   * visibleMessages 因筛选变化时直接重新排序，无需再次调用 Rust。
+   */
+  const [navSearchResultSet, setNavSearchResultSet] = useState<Set<string>>(new Set());
+  /** 当前定位到第几个匹配（-1 表示无匹配） */
+  const [currentMatchIndex, setCurrentMatchIndex] = useState(-1);
+  /** 正在闪烁的消息 displayId（用于 search-flash CSS 类） */
+  const [flashingId, setFlashingId] = useState<string | null>(null);
+  /**
+   * 搜索导航自动展开的消息 displayId。
+   * 当搜索导航跳转到折叠消息（compact_summary / system）时设置，
+   * 导航离开时清除 → 触发子组件自动收起（仅限自动展开的情况）。
+   */
+  const [searchAutoExpandId, setSearchAutoExpandId] = useState<string | null>(null);
+  /** NavSearchBar 组件的命令式引用（focus / reset） */
+  const navSearchBarRef = useRef<NavSearchBarHandle>(null);
+  /**
+   * 搜索高亮选项（仅在 Rust 搜索完成后更新，不随每次击键变化）。
+   *
+   * 将 searchHighlight 作为 state 而非 derived value 是性能关键：
+   * searchHighlight 保持 undefined → React.memo 跳过所有消息子树的重渲染。
+   * 只有 Rust 搜索完成后才设置新的 searchHighlight 触发高亮渲染。
+   */
+  const [searchHighlight, setSearchHighlight] = useState<SearchHighlight | undefined>(undefined);
 
   // 直接使用 Rust 返回的数据
   const displayMessages = transformedSession?.displayMessages ?? [];
@@ -446,24 +548,24 @@ export function ChatView({
   }, []);
 
   /**
-   * 后端搜索：debounce 300ms，调用 Rust SIMD 搜索
+   * 内容筛选后端搜索：debounce 300ms，调用 Rust SIMD 搜索
    */
   useEffect(() => {
-    if (!searchQuery.trim() || !session) {
-      setSearchResults(null);
+    if (!filterSearchQuery.trim() || !session) {
+      setFilterSearchResults(null);
       return;
     }
     const timer = setTimeout(async () => {
       try {
-        const ids = await searchSession(session.filePath, searchQuery);
-        setSearchResults(new Set(ids));
+        const ids = await searchSession(session.filePath, filterSearchQuery);
+        setFilterSearchResults(new Set(ids));
       } catch (err) {
         console.error('搜索失败:', err);
-        setSearchResults(null);
+        setFilterSearchResults(null);
       }
     }, 300);
     return () => clearTimeout(timer);
-  }, [searchQuery, session]);
+  }, [filterSearchQuery, session]);
 
   /**
    * 组合筛选：类型多选 + 后端搜索结果交叉
@@ -474,14 +576,27 @@ export function ChatView({
     return displayMessages.filter(msg => {
       // 类型筛选
       if (!activeFilters.has(msg.displayType as FilterableType)) return false;
-      // 搜索结果筛选
-      if (searchResults !== null && !searchResults.has(msg.displayId)) return false;
+      // 内容筛选搜索结果
+      if (filterSearchResults !== null && !filterSearchResults.has(msg.displayId)) return false;
       return true;
     });
-  }, [displayMessages, activeFilters, searchResults]);
+  }, [displayMessages, activeFilters, filterSearchResults]);
 
   /** 过滤前的总显示消息数，用于显示 "N/M" 计数 */
   const totalMessages = displayMessages.length;
+
+  /**
+   * 导航搜索匹配 ID 有序列表（按 visibleMessages 顺序，由 navSearchResultSet 派生）
+   *
+   * Stale-while-revalidate：visibleMessages 因筛选变化时，直接重排序展示已有结果，
+   * 不需要重新调用 Rust 搜索。只有 navSearchResultSet 变化（新 query）才触发 Rust 调用。
+   */
+  const navSearchMatchIds = useMemo(() => {
+    if (!navSearchResultSet.size) return [];
+    return visibleMessages
+      .filter(msg => navSearchResultSet.has(msg.displayId))
+      .map(msg => msg.displayId);
+  }, [navSearchResultSet, visibleMessages]);
 
   /**
    * 渐进式渲染：视口驱动，先渲染可视区域，空闲时向外扩散。
@@ -489,7 +604,7 @@ export function ChatView({
    * handleScrollForRender 绑定到滚动容器的 onScroll。
    * scrollToBottom 在初始渲染完成后调用。
    */
-  const { isRendered, handleScroll: handleScrollForRender, scrollToBottom } = useProgressiveRender(
+  const { isRendered, handleScroll: handleScrollForRender, scrollToBottom, forceRenderIndex } = useProgressiveRender(
     visibleMessages.length,
     scrollContainerRef,
   );
@@ -541,6 +656,173 @@ export function ChatView({
       }
     });
   }, []);
+
+  // ==================== VSCode 风格导航搜索逻辑 ====================
+
+  /**
+   * NavSearchBar 的搜索请求回调。
+   *
+   * 由 NavSearchBar 在 debounce 到期 / Enter / Aa|.* 切换时调用。
+   * 负责调用 Rust 后端搜索并更新 ChatView 的搜索结果状态。
+   *
+   * 使用 ref 存储最新请求 ID 实现 stale-while-revalidate：
+   * 新请求到来时递增 ID，异步返回后检查 ID 是否仍为最新，
+   * 过期的结果直接丢弃。
+   */
+  const searchRequestIdRef = useRef(0);
+  const handleNavSearch = useCallback(async (request: SearchRequest) => {
+    const { query, caseSensitive, useRegex } = request;
+
+    // 空查询：清空所有搜索状态
+    if (!query.trim() || !session) {
+      searchRequestIdRef.current++;
+      setNavSearchResultSet(new Set());
+      setCurrentMatchIndex(-1);
+      setSearchHighlight(undefined);
+      return;
+    }
+
+    // ⚠ 不在此处同步调用 setSearchHighlight(undefined)！
+    // 原因：handleNavSearch 是从 NavSearchBar 的 onClick 同步调用的，
+    // 任何 ChatView setState 都会被 React 18 批处理到同一次渲染，
+    // 导致 ChatView 在按钮点击时立即重渲染数百条消息 → 1s+ 延迟。
+    //
+    // 采用 stale-while-revalidate：旧高亮保留到 Rust 返回新结果后一次性替换。
+    // 用户感知：按钮视觉即时切换，高亮在 ~50ms 后更新（Rust 搜索耗时）。
+
+    // 递增请求 ID，用于丢弃 stale 结果
+    const requestId = ++searchRequestIdRef.current;
+
+    try {
+      const ids = await searchSession(session.filePath, query, {
+        caseSensitive,
+        useRegex,
+      });
+      // 异步返回后检查是否已被更新的请求取代
+      if (requestId !== searchRequestIdRef.current) return;
+      const resultSet = new Set(ids);
+      // 原子性同时更新结果集 + 高亮选项（React 18 自动批处理）
+      setNavSearchResultSet(resultSet);
+      setSearchHighlight(
+        resultSet.size > 0
+          ? { query, caseSensitive, useRegex }
+          : undefined,
+      );
+    } catch (err) {
+      if (requestId !== searchRequestIdRef.current) return;
+      console.error('导航搜索失败:', err);
+      setNavSearchResultSet(new Set());
+      setSearchHighlight(undefined);
+    }
+  }, [session]);
+
+  /**
+   * 当搜索结果集变化时，重置导航到第一个匹配项。
+   * （切换大小写/正则选项、输入新词后的首次定位）
+   */
+  useEffect(() => {
+    if (navSearchResultSet.size === 0) {
+      setCurrentMatchIndex(-1);
+    } else {
+      setCurrentMatchIndex(0);
+    }
+  }, [navSearchResultSet]);
+
+  /**
+   * 导航到下一个匹配项（循环）
+   */
+  const navSearchNext = useCallback(() => {
+    if (navSearchMatchIds.length === 0) return;
+    setCurrentMatchIndex(prev => (prev + 1) % navSearchMatchIds.length);
+  }, [navSearchMatchIds.length]);
+
+  /**
+   * 导航到上一个匹配项（循环）
+   */
+  const navSearchPrev = useCallback(() => {
+    if (navSearchMatchIds.length === 0) return;
+    setCurrentMatchIndex(prev => (prev - 1 + navSearchMatchIds.length) % navSearchMatchIds.length);
+  }, [navSearchMatchIds.length]);
+
+  /**
+   * 关闭导航搜索：清空 ChatView 搜索状态 + 重置 NavSearchBar 内部状态
+   */
+  const closeNavSearch = useCallback(() => {
+    setNavSearchOpen(false);
+    searchRequestIdRef.current++;
+    setNavSearchResultSet(new Set());
+    setCurrentMatchIndex(-1);
+    setFlashingId(null);
+    setSearchAutoExpandId(null);
+    setSearchHighlight(undefined);
+    navSearchBarRef.current?.reset();
+  }, []);
+
+  /**
+   * 导航跳转 + 闪烁效果 + 自动展开折叠消息：
+   * currentMatchIndex 变化时，自动滚动到目标消息并触发闪烁动画。
+   * 如果目标消息是折叠类型（compact_summary / system），自动展开。
+   */
+  useEffect(() => {
+    if (currentMatchIndex < 0 || currentMatchIndex >= navSearchMatchIds.length) {
+      // 无匹配时清除自动展开
+      setSearchAutoExpandId(null);
+      return;
+    }
+    const targetDisplayId = navSearchMatchIds[currentMatchIndex];
+    const targetMsg = visibleMessages.find(msg => msg.displayId === targetDisplayId);
+    if (!targetMsg) return;
+    // 找到在 visibleMessages 中的索引
+    const targetIdx = visibleMessages.indexOf(targetMsg);
+
+    // 1. 确保目标消息已渲染
+    forceRenderIndex(targetIdx);
+
+    // 2. 自动展开折叠消息（compact_summary / system）
+    const isCollapsible = targetMsg.displayType === 'compact_summary' || targetMsg.displayType === 'system';
+    setSearchAutoExpandId(isCollapsible ? targetDisplayId : null);
+
+    // 3. 滚动到目标消息 + 闪烁
+    //    如果是折叠消息，延迟 300ms 等待展开动画完成后再滚动，确保定位准确
+    const scrollDelay = isCollapsible ? 300 : 0;
+    const scrollTimer = setTimeout(() => {
+      requestAnimationFrame(() => {
+        const el = scrollContainerRef.current?.querySelector(`[data-msg-index="${targetIdx}"]`);
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+        // 触发闪烁
+        setFlashingId(targetDisplayId);
+      });
+    }, scrollDelay);
+
+    // 4. 1 秒后清除闪烁
+    const flashTimer = setTimeout(() => setFlashingId(null), 1000 + scrollDelay);
+    return () => {
+      clearTimeout(scrollTimer);
+      clearTimeout(flashTimer);
+    };
+  }, [currentMatchIndex, navSearchMatchIds, visibleMessages, forceRenderIndex]);
+
+  /**
+   * 全局快捷键：Ctrl+F / Cmd+F 打开导航搜索栏
+   */
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+        e.preventDefault();
+        // 切换搜索栏：已打开则关闭，未打开则打开并聚焦
+        if (navSearchOpen) {
+          closeNavSearch();
+        } else {
+          setNavSearchOpen(true);
+          navSearchBarRef.current?.focus();
+        }
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [navSearchOpen, closeNavSearch]);
 
   /**
    * 开始编辑指定的显示消息。
@@ -682,8 +964,8 @@ export function ChatView({
     );
   }
 
-  /** 筛选器是否处于非全选状态 */
-  const isFiltered = activeFilters.size !== ALL_FILTERS.length;
+  /** 筛选器是否处于非全选状态（类型不全选 或 内容筛选搜索有关键词） */
+  const isFiltered = activeFilters.size !== ALL_FILTERS.length || filterSearchQuery.trim() !== '';
 
   return (
     <div className="flex-1 flex flex-col bg-background min-w-0">
@@ -707,7 +989,7 @@ export function ChatView({
             </h2>
             <p className="text-sm text-muted-foreground break-words">
               {formatTimestamp(session.timestamp)} ·{' '}
-              {searchQuery.trim() || isFiltered
+              {filterSearchQuery.trim() || isFiltered
                 ? `显示 ${visibleMessages.length}/${totalMessages} 条消息`
                 : `${visibleMessages.length} 条消息`}
               {/* Token 使用量汇总 */}
@@ -722,25 +1004,21 @@ export function ChatView({
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          {/* 搜索输入框 */}
-          <div className="relative">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="搜索消息..."
-              className="pl-8 pr-3 py-1.5 w-40 rounded-lg bg-secondary text-foreground border border-border focus:outline-none focus:border-ring text-sm"
-            />
-            {searchQuery && (
-              <button
-                onClick={() => setSearchQuery('')}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            )}
-          </div>
+          {/* 搜索按钮：点击打开 VSCode 风格导航搜索栏 */}
+          <motion.button
+            onClick={() => {
+              setNavSearchOpen(true);
+              navSearchBarRef.current?.focus();
+            }}
+            className={`p-2 rounded-lg transition-colors ${
+              navSearchOpen ? 'bg-primary text-primary-foreground' : 'hover:bg-accent'
+            }`}
+            title="搜索 (Ctrl+F)"
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
+          >
+            <Search className="w-5 h-5" />
+          </motion.button>
 
           {/* 选择模式切换按钮 */}
           <motion.button
@@ -832,6 +1110,28 @@ export function ChatView({
                   transition={{ duration: 0.15 }}
                   className="absolute right-0 top-full mt-1 w-48 bg-popover border border-border rounded-lg shadow-lg z-50 overflow-hidden"
                 >
+                  {/* 内容筛选搜索输入框 */}
+                  <div className="px-2 py-2 border-b border-border/50">
+                    <div className="relative">
+                      <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+                      <input
+                        type="text"
+                        value={filterSearchQuery}
+                        onChange={(e) => setFilterSearchQuery(e.target.value)}
+                        placeholder="搜索过滤..."
+                        className="w-full pl-7 pr-7 py-1.5 rounded-md bg-secondary text-foreground border border-border focus:outline-none focus:border-ring text-xs"
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                      {filterSearchQuery && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setFilterSearchQuery(''); }}
+                          className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
                   {/* 全选/取消全选 */}
                   <button
                     onClick={toggleAllFilters}
@@ -919,6 +1219,29 @@ export function ChatView({
         </div>
       </div>
 
+      {/* ==================== VSCode 风格导航搜索栏 ==================== */}
+      <AnimatePresence>
+        {navSearchOpen && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.15 }}
+            className="border-b border-border bg-card shrink-0 overflow-hidden"
+          >
+            <NavSearchBar
+              ref={navSearchBarRef}
+              matchCount={navSearchMatchIds.length}
+              currentMatchIndex={currentMatchIndex}
+              onSearch={handleNavSearch}
+              onNext={navSearchNext}
+              onPrev={navSearchPrev}
+              onClose={closeNavSearch}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* 消息列表：正常时间顺序，视口驱动渐进式渲染 */}
       <div
         ref={scrollContainerRef}
@@ -941,7 +1264,13 @@ export function ChatView({
               {isRendered(index) ? (
                 /* ====== 已渲染：完整消息内容 ====== */
                 msg.displayType === 'compact_summary' ? (
-                  <CompactSummaryBlock msg={msg} projectPath={projectPath} toolUseMap={toolUseMap} />
+                  <CompactSummaryBlock
+                    msg={msg}
+                    projectPath={projectPath}
+                    toolUseMap={toolUseMap}
+                    searchHighlight={navSearchResultSet.has(msg.displayId) ? searchHighlight : undefined}
+                    searchAutoExpand={searchAutoExpandId === msg.displayId}
+                  />
                 ) :
                 msg.displayType === 'system' ? (
                   <SystemMessageBlock
@@ -949,6 +1278,8 @@ export function ChatView({
                     projectPath={projectPath}
                     toolUseMap={toolUseMap}
                     onNavigateToSession={onNavigateToSession}
+                    searchHighlight={navSearchResultSet.has(msg.displayId) ? searchHighlight : undefined}
+                    searchAutoExpand={searchAutoExpandId === msg.displayId}
                   />
                 ) :
             <div
@@ -958,7 +1289,7 @@ export function ChatView({
                   : msg.displayType === 'tool_result'
                     ? 'bg-emerald-500/5 border border-emerald-500/10'
                     : 'bg-muted/50 border border-border'
-              } ${selectionMode && selectedMessages.has(msg.sourceUuid) ? 'ring-2 ring-primary' : ''}`}
+              } ${selectionMode && selectedMessages.has(msg.sourceUuid) ? 'ring-2 ring-primary' : ''} ${flashingId === msg.displayId ? 'search-flash' : ''}`}
               onClick={selectionMode ? () => onToggleSelect(msg.sourceUuid) : undefined}
               style={selectionMode ? { cursor: 'pointer' } : undefined}
             >
@@ -1141,7 +1472,12 @@ export function ChatView({
                 </div>
               ) : (
                 <div className="prose prose-sm dark:prose-invert max-w-none">
-                  <MessageBlockList content={msg.content} projectPath={projectPath} toolUseMap={toolUseMap} />
+                  <MessageBlockList
+                    content={msg.content}
+                    projectPath={projectPath}
+                    toolUseMap={toolUseMap}
+                    searchHighlight={navSearchResultSet.has(msg.displayId) ? searchHighlight : undefined}
+                  />
                 </div>
               )}
 

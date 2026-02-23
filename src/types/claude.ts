@@ -539,3 +539,29 @@ export interface TransformedSession {
   /** Token 统计汇总 */
   tokenStats: TokenStats;
 }
+
+/**
+ * 搜索高亮选项接口
+ *
+ * 封装搜索关键词和搜索模式，用于在渲染链中传递高亮参数。
+ * 替代旧的 `highlightQuery: string` prop，支持大小写敏感和正则模式。
+ *
+ * 传播路径：ChatView → MessageBlockList → MessageContentRenderer →
+ *           MarkdownRenderer（通过 rehype 插件）/ ToolResultRenderer（通过 HighlightedText）
+ */
+export interface SearchHighlight {
+  /** 搜索关键词（原始输入，不做大小写转换） */
+  query: string;
+  /**
+   * 是否大小写敏感。
+   * - false（默认）：忽略大小写匹配，与 Rust 后端 case_sensitive=false 一致
+   * - true：严格匹配大小写
+   */
+  caseSensitive: boolean;
+  /**
+   * 是否为正则表达式模式。
+   * - false（默认）：普通字面量子串搜索
+   * - true：将 query 作为正则表达式处理（JavaScript RegExp / Rust regex crate）
+   */
+  useRegex: boolean;
+}

@@ -335,5 +335,27 @@ export function useProgressiveRender(
     requestAnimationFrame(poll);
   }, [scrollContainerRef]);
 
-  return { isRendered, handleScroll, scrollToBottom };
+  /**
+   * 强制渲染指定索引的消息及其周围区域。
+   *
+   * 搜索导航跳转时，目标消息可能尚未渲染（处于占位符状态）。
+   * 此函数立即将目标索引周围 INITIAL_BATCH 范围内的消息加入渲染区间，
+   * 确保后续 scrollIntoView 能找到真实 DOM 元素。
+   *
+   * @param index - 需要强制渲染的消息在 visibleMessages 中的索引
+   */
+  const forceRenderIndex = useCallback((index: number) => {
+    // 边界检查
+    if (index < 0 || index >= totalCount) return;
+    // 已在渲染范围内则无需操作
+    if (isInRanges(rangesRef.current, index)) return;
+    // 以 index 为中心，前后各扩展 INITIAL_BATCH/2 条
+    const batchLo = Math.max(0, index - Math.floor(INITIAL_BATCH / 2));
+    const batchHi = Math.min(totalCount - 1, index + Math.floor(INITIAL_BATCH / 2));
+    rangesRef.current = addAndMerge(rangesRef.current, { lo: batchLo, hi: batchHi });
+    pendingCountRef.current = 0;
+    setVersion(v => v + 1);
+  }, [totalCount]);
+
+  return { isRendered, handleScroll, scrollToBottom, forceRenderIndex };
 }

@@ -350,17 +350,41 @@ export async function editMessageContent(
 // ============ 搜索功能 ============
 
 /**
+ * 搜索选项接口
+ *
+ * 与 Rust 后端 `search_session` 命令的 `case_sensitive` / `use_regex` 参数对应。
+ */
+export interface SearchOptions {
+  /** 是否大小写敏感（默认 false） */
+  caseSensitive?: boolean;
+  /** 是否启用正则表达式模式（默认 false） */
+  useRegex?: boolean;
+}
+
+/**
  * 在 Rust 后端搜索会话消息
  *
- * 使用 memchr SIMD 加速在预计算的小写化搜索文本上执行子串搜索，
- * 仅返回匹配的 display_id 列表，避免大量文本通过 IPC 传输。
+ * 支持三种模式：
+ * - 默认：大小写不敏感的 memchr SIMD 子串搜索（最快）
+ * - caseSensitive：大小写敏感的 memchr SIMD 子串搜索
+ * - useRegex：通过 Rust regex crate 正则匹配（大小写由 caseSensitive 控制）
  *
  * @param sessionFilePath - 会话 JSONL 文件的绝对路径
  * @param query - 搜索查询词
+ * @param options - 搜索选项（可选，默认不敏感+非正则）
  * @returns 返回匹配的 display_id 字符串数组
  */
-export async function searchSession(sessionFilePath: string, query: string): Promise<string[]> {
-  return invoke<string[]>('search_session', { sessionFilePath, query });
+export async function searchSession(
+  sessionFilePath: string,
+  query: string,
+  options?: SearchOptions,
+): Promise<string[]> {
+  return invoke<string[]>('search_session', {
+    sessionFilePath,
+    query,
+    caseSensitive: options?.caseSensitive ?? false,
+    useRegex: options?.useRegex ?? false,
+  });
 }
 
 // ============ 导出功能 ============

@@ -19,6 +19,8 @@
 import { memo, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { rehypeHighlight } from '../utils/rehypeHighlight';
+import type { SearchHighlight } from '../types/claude';
 
 /**
  * MarkdownRenderer 组件的属性接口
@@ -28,6 +30,14 @@ interface MarkdownRendererProps {
   content: string;
   /** 额外的 CSS 类名 */
   className?: string;
+  /**
+   * 搜索高亮选项。
+   * 非空时，通过 rehype 插件将 Markdown 渲染结果中匹配的文本
+   * 包裹在 <mark class="search-highlight"> 中高亮显示。
+   * 支持字面量（大小写敏感/不敏感）和正则表达式模式。
+   * undefined 时不注入 rehype 插件，React.memo 可跳过重渲染。
+   */
+  searchHighlight?: SearchHighlight;
 }
 
 /** remark 插件列表（稳定引用，避免 ReactMarkdown 重渲染） */
@@ -42,7 +52,7 @@ const remarkPlugins = [remarkGfm];
  * @param props - 包含 Markdown 文本和可选类名
  * @returns 渲染后的 JSX 元素
  */
-export const MarkdownRenderer = memo(function MarkdownRenderer({ content, className = '' }: MarkdownRendererProps) {
+export const MarkdownRenderer = memo(function MarkdownRenderer({ content, className = '', searchHighlight }: MarkdownRendererProps) {
   // 自定义组件映射（稳定引用）
   const components = useMemo(() => ({
     /**
@@ -103,10 +113,21 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content, classN
     },
   }), []);
 
+  /**
+   * 动态生成 rehype 插件列表：
+   * - 有 searchHighlight → 注入搜索高亮插件（支持字面量/正则 3 种模式）
+   * - 无 searchHighlight → undefined（不传给 ReactMarkdown，避免触发重渲染）
+   */
+  const rehypePlugins = useMemo(
+    () => searchHighlight ? [rehypeHighlight(searchHighlight)] : undefined,
+    [searchHighlight],
+  );
+
   return (
     <div className={`markdown-body ${className}`}>
       <ReactMarkdown
         remarkPlugins={remarkPlugins}
+        rehypePlugins={rehypePlugins}
         components={components}
       >
         {content}

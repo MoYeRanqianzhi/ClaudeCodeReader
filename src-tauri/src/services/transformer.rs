@@ -5,14 +5,17 @@
 //! ## 转换流程
 //! 1. **并行 map**：使用 rayon 对每条消息独立执行分类、提取 tool_use 信息、提取 usage
 //! 2. **顺序 reduce**：按消息顺序合并 tool_use_map 和 token_stats，构建 DisplayMessage 列表
-//! 3. **搜索文本提取**：并行提取每条 DisplayMessage 的可搜索文本（小写化预计算）
+//! 3. **搜索文本提取**：并行提取每条 DisplayMessage 的原始大小写文本（`original_texts`），
+//!    再从原始文本生成小写化版本（`search_texts`），避免二次遍历 content 块
 //!
 //! 消息保持原始时间顺序（旧→新），前端通过渐进式渲染实现视口优先加载。
 //!
 //! ## 设计原则
 //! - 零注入：不修改原始 `serde_json::Value`
 //! - 完全分离：`DisplayMessage` 是独立 struct
-//! - 搜索文本预计算：小写化后缓存，搜索时零转换
+//! - 搜索文本双版本缓存：
+//!   - `search_texts`：小写化版本，用于大小写不敏感搜索
+//!   - `original_texts`：原始大小写版本，用于大小写敏感搜索和正则搜索
 
 use std::collections::HashMap;
 
@@ -40,17 +43,21 @@ struct PerMessageResult {
 
 /// 转换入口：将原始消息列表转换为前端可渲染的 TransformedSession
 ///
-/// 返回 `(TransformedSession, Vec<String>)`：
+/// 返回 `(TransformedSession, Vec<String>, Vec<String>)` 三元组：
 /// - `TransformedSession`：通过 IPC 返回给前端
-/// - `Vec<String>`：搜索文本，`search_texts[i]` 对应 `display_messages[i]` 的小写化文本，
-///   仅缓存在 Rust 端，不传给前端
+/// - `Vec<String>`（search_texts）：小写化搜索文本，`search_texts[i]` 对应
+///   `display_messages[i]` 的小写化文本，用于大小写不敏感搜索
+/// - `Vec<String>`（original_texts）：原始大小写搜索文本，用于大小写敏感搜索和正则搜索
+///
+/// 两个搜索文本向量均仅缓存在 Rust 端，不传给前端。
 ///
 /// # 参数
 /// - `messages` - 原始消息 `Vec<Value>` 列表（从 JSONL 解析）
 ///
 /// # 返回值
-/// `(TransformedSession, Vec<String>)` 元组
-pub fn transform_session(messages: &[Value]) -> (TransformedSession, Vec<String>) {
+/// `(TransformedSession, Vec<String>, Vec<String>)` 三元组：
+/// `(session, lowercase_texts, original_texts)`
+pub fn transform_session(messages: &[Value]) -> (TransformedSession, Vec<String>, Vec<String>) {
     // ---- 阶段 1：并行 map，每条消息独立处理（分类 + tool_use 提取 + usage 提取）----
     let per_msg: Vec<PerMessageResult> = messages
         .par_iter()
@@ -77,10 +84,19 @@ pub fn transform_session(messages: &[Value]) -> (TransformedSession, Vec<String>
         build_display_messages(&mut display_messages, result.classification, msg);
     }
 
-    // ---- 阶段 3：并行提取搜索文本（小写化预计算）----
-    let search_texts: Vec<String> = display_messages
+    // ---- 阶段 3：并行提取原始大小写搜索文本 ----
+    // 先提取 original_texts（保留原始大小写），再从 original_texts 直接小写化生成
+    // search_texts，避免两次遍历 content 块，提高性能
+    let original_texts: Vec<String> = display_messages
         .par_iter()
-        .map(|dm| extract_search_text(&dm.content))
+        .map(|dm| extract_search_text_original(&dm.content))
+        .collect();
+
+    // ---- 阶段 4：从 original_texts 生成小写化版本 ----
+    // 直接调用 to_lowercase()，无需再次遍历 content 块
+    let search_texts: Vec<String> = original_texts
+        .par_iter()
+        .map(|t| t.to_lowercase())
         .collect();
 
     (
@@ -90,6 +106,7 @@ pub fn transform_session(messages: &[Value]) -> (TransformedSession, Vec<String>
             token_stats,
         },
         search_texts,
+        original_texts,
     )
 }
 
@@ -462,7 +479,7 @@ fn build_user_display_messages(
     }
 }
 
-/// 从内容块列表中提取所有可搜索文本，小写化后返回
+/// 从内容块列表中提取所有可搜索文本，保留原始大小写
 ///
 /// 提取策略：
 /// - text 块 → text 字段
@@ -470,27 +487,33 @@ fn build_user_display_messages(
 /// - tool_result 块 → content 字段（字符串或嵌套数组）
 /// - tool_use 块 → input 字段（序列化为 JSON 字符串）
 ///
-/// 结果预先小写化，搜索时仅需对查询词小写化一次，避免重复转换。
+/// 结果保留原始大小写（不做小写化），用于：
+/// 1. 大小写敏感搜索模式（直接使用）
+/// 2. 正则表达式搜索模式（直接使用）
+/// 3. 生成小写化版本 `search_texts`（调用方在此基础上 `.to_lowercase()`）
+///
+/// 相比原有 `extract_search_text`，本函数去掉了末尾的 `.to_lowercase()` 调用，
+/// 由 `transform_session` 统一批量小写化，减少重复的字符串分配。
 ///
 /// # 参数
 /// - `content` - DisplayMessage 的 content 块列表
 ///
 /// # 返回值
-/// 小写化的可搜索文本字符串
-fn extract_search_text(content: &[Value]) -> String {
+/// 保留原始大小写的可搜索文本字符串
+fn extract_search_text_original(content: &[Value]) -> String {
     let mut buf = String::new();
     for block in content {
-        // text 块
+        // text 块：提取 text 字段
         if let Some(t) = block.get("text").and_then(|v| v.as_str()) {
             buf.push_str(t);
             buf.push('\n');
         }
-        // thinking 块
+        // thinking 块：提取 thinking 字段
         if let Some(t) = block.get("thinking").and_then(|v| v.as_str()) {
             buf.push_str(t);
             buf.push('\n');
         }
-        // tool_result 嵌套内容
+        // tool_result 嵌套内容：content 字段（字符串或数组）
         if let Some(c) = block.get("content") {
             if let Some(s) = c.as_str() {
                 buf.push_str(s);
@@ -505,7 +528,7 @@ fn extract_search_text(content: &[Value]) -> String {
                 }
             }
         }
-        // tool_use input（序列化为 JSON）
+        // tool_use 块：将 input 序列化为 JSON 字符串
         if block.get("type").and_then(|v| v.as_str()) == Some("tool_use") {
             if let Some(input) = block.get("input") {
                 buf.push_str(&input.to_string());
@@ -513,6 +536,6 @@ fn extract_search_text(content: &[Value]) -> String {
             }
         }
     }
-    // 预计算小写，搜索时零转换
-    buf.to_lowercase()
+    // 返回原始大小写文本（不做 to_lowercase()）
+    buf
 }

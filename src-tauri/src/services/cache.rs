@@ -13,9 +13,17 @@
 //! Tauri 的 command 可能在不同线程上并发执行，RwLock 允许多个读操作并发进行。
 //!
 //! ## 搜索架构
-//! 搜索文本（小写化）在 transform 阶段预计算，缓存在 Rust 端。
-//! 前端发起搜索时，Rust 使用 `memchr::memmem` SIMD 加速在缓存文本上执行子串搜索，
-//! 仅返回匹配的 display_id 列表，避免大量文本通过 IPC 传输。
+//! 搜索文本在 transform 阶段预计算并以双版本形式缓存在 Rust 端：
+//! - `search_texts`：小写化版本，用于大小写不敏感搜索（`memchr::memmem` SIMD 加速）
+//! - `original_texts`：原始大小写版本，用于大小写敏感搜索和正则表达式搜索
+//!
+//! `search_in_cache` 支持以下 4 种搜索模式（通过 `case_sensitive` 和 `use_regex` 参数控制）：
+//! 1. **正则 + 大小写不敏感**：`(?i)pattern` 正则，在 `original_texts` 上匹配
+//! 2. **正则 + 大小写敏感**：`pattern` 正则，在 `original_texts` 上匹配
+//! 3. **字面量 + 大小写敏感**：`memchr::memmem` 在 `original_texts` 上精确匹配
+//! 4. **字面量 + 大小写不敏感**：`memchr::memmem` 在 `search_texts`（已小写）上匹配
+//!
+//! 小数组（< `PARALLEL_THRESHOLD`）使用顺序迭代，大数组使用 rayon 并行迭代。
 
 use std::collections::HashMap;
 use std::sync::RwLock;
@@ -36,6 +44,15 @@ const PROJECT_CACHE_TTL_SECS: u64 = 30;
 ///
 /// 最多缓存这么多个会话的转换结果和搜索文本。当缓存满时，最久未访问的会话将被淘汰。
 const SESSION_CACHE_MAX_ENTRIES: usize = 20;
+
+/// 并行搜索的数组长度阈值
+///
+/// 当 display_messages 数量小于此阈值时，使用顺序迭代（`.iter()`）搜索；
+/// 否则使用 rayon 并行迭代（`.par_iter()`）搜索。
+///
+/// 对于小数组，并行化的线程调度开销会超过实际计算收益，
+/// 因此小数组场景下顺序搜索反而更快。
+const PARALLEL_THRESHOLD: usize = 100;
 
 /// 应用全局缓存状态
 ///
@@ -72,13 +89,15 @@ struct SessionCache {
 
 /// 单个会话缓存条目
 ///
-/// 存储 TransformedSession（IPC 返回数据）和搜索文本（不序列化到前端）。
-/// 搜索文本 `search_texts[i]` 对应 `transformed.display_messages[i]` 的小写化可搜索文本。
+/// 存储 TransformedSession（IPC 返回数据）和两个版本的搜索文本（不序列化到前端）。
+/// `search_texts[i]` 和 `original_texts[i]` 均对应 `transformed.display_messages[i]`。
 struct SessionCacheEntry {
     /// IPC 返回的转换结果
     transformed: TransformedSession,
-    /// 小写化搜索文本（不传给前端，仅用于 Rust 端搜索）
+    /// 小写化搜索文本（不传给前端，用于大小写不敏感搜索）
     search_texts: Vec<String>,
+    /// 原始大小写搜索文本（用于大小写敏感和正则搜索模式）
+    original_texts: Vec<String>,
     /// 文件的最后修改时间（用于判断缓存是否仍然有效）
     file_mtime: SystemTime,
     /// 最后访问时间（用于 LRU 淘汰）
@@ -176,12 +195,14 @@ impl AppCache {
     /// # 参数
     /// - `file_path` - 会话 JSONL 文件的绝对路径
     /// - `transformed` - 转换后的 TransformedSession
-    /// - `search_texts` - 小写化的搜索文本列表
+    /// - `search_texts` - 小写化的搜索文本列表（用于大小写不敏感搜索）
+    /// - `original_texts` - 原始大小写搜索文本列表（用于大小写敏感和正则搜索）
     pub fn set_session(
         &self,
         file_path: &str,
         transformed: TransformedSession,
         search_texts: Vec<String>,
+        original_texts: Vec<String>,
     ) {
         if let Ok(mut cache) = self.sessions.write() {
             // 获取文件的当前 mtime
@@ -210,6 +231,7 @@ impl AppCache {
                 SessionCacheEntry {
                     transformed,
                     search_texts,
+                    original_texts,
                     file_mtime,
                     last_accessed: Instant::now(),
                 },
@@ -229,42 +251,138 @@ impl AppCache {
         }
     }
 
-    /// 在缓存的搜索文本上执行 SIMD 加速子串搜索
+    /// 在缓存的搜索文本上执行搜索，支持 4 种搜索模式
     ///
-    /// 使用 `memchr::memmem::Finder` 在预计算的小写化搜索文本上执行搜索，
-    /// 利用 SIMD 指令加速子串匹配。
+    /// 根据 `case_sensitive` 和 `use_regex` 参数的组合，选择不同的搜索策略：
+    ///
+    /// | use_regex | case_sensitive | 搜索文本        | 方法                  |
+    /// |-----------|----------------|-----------------|----------------------|
+    /// | true      | false          | original_texts  | regex `(?i)pattern`  |
+    /// | true      | true           | original_texts  | regex `pattern`      |
+    /// | false     | true           | original_texts  | memchr::memmem 精确  |
+    /// | false     | false          | search_texts    | memchr::memmem 小写  |
+    ///
+    /// 小数组（< `PARALLEL_THRESHOLD`）使用顺序迭代，大数组使用 rayon 并行迭代。
     ///
     /// # 参数
     /// - `file_path` - 会话 JSONL 文件的绝对路径
-    /// - `query` - 搜索查询词（将被小写化）
+    /// - `query` - 搜索查询词
+    /// - `case_sensitive` - 是否大小写敏感
+    /// - `use_regex` - 是否使用正则表达式模式
     ///
     /// # 返回值
-    /// - `Some(display_ids)` - 匹配的 display_id 列表
-    /// - `None` - 缓存中没有该会话的数据
+    /// - `Ok(Some(display_ids))` - 匹配的 display_id 列表
+    /// - `Ok(None)` - 缓存中没有该会话的数据
+    /// - `Err(msg)` - 正则表达式编译失败，msg 为错误描述
     pub fn search_in_cache(
         &self,
         file_path: &str,
         query: &str,
-    ) -> Option<Vec<String>> {
-        let cache = self.sessions.read().ok()?;
-        let entry = cache.entries.get(file_path)?;
-
-        // 将查询词小写化（搜索文本已预计算为小写）
-        let needle = query.to_lowercase();
-        let finder = memchr::memmem::Finder::new(needle.as_bytes());
+        case_sensitive: bool,
+        use_regex: bool,
+    ) -> Result<Option<Vec<String>>, String> {
+        // 获取缓存读锁，缓存不存在时返回 Ok(None)
+        let cache = self.sessions.read().map_err(|e| format!("缓存读锁获取失败: {}", e))?;
+        let entry = match cache.entries.get(file_path) {
+            Some(e) => e,
+            None => return Ok(None),
+        };
 
         let dm = &entry.transformed.display_messages;
+        // 元素数量决定使用顺序还是并行搜索
+        let n = entry.search_texts.len();
 
-        // 使用 rayon 并行搜索所有搜索文本
-        let results: Vec<String> = entry
-            .search_texts
-            .par_iter()
-            .enumerate()
-            .filter(|(_, text)| finder.find(text.as_bytes()).is_some())
-            .map(|(i, _)| dm[i].display_id.clone())
-            .collect();
+        if use_regex {
+            // ---- 正则表达式搜索模式 ----
+            // 根据大小写敏感选项构建正则表达式 pattern
+            let pattern = if case_sensitive {
+                // 大小写敏感：直接使用原始 query 作为 pattern
+                query.to_string()
+            } else {
+                // 大小写不敏感：在 pattern 前加 `(?i)` 修饰符
+                format!("(?i){}", query)
+            };
 
-        Some(results)
+            // 编译正则表达式，失败时返回 Err
+            let re = regex::Regex::new(&pattern)
+                .map_err(|e| format!("无效正则表达式: {}", e))?;
+
+            // 在 original_texts 上执行正则匹配（保留原始大小写供 regex 处理）
+            let results: Vec<String> = if n < PARALLEL_THRESHOLD {
+                // 小数组：顺序迭代，避免并行化开销
+                entry
+                    .original_texts
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, text)| re.is_match(text))
+                    .map(|(i, _)| dm[i].display_id.clone())
+                    .collect()
+            } else {
+                // 大数组：rayon 并行迭代，利用多核加速
+                entry
+                    .original_texts
+                    .par_iter()
+                    .enumerate()
+                    .filter(|(_, text)| re.is_match(text))
+                    .map(|(i, _)| dm[i].display_id.clone())
+                    .collect()
+            };
+
+            Ok(Some(results))
+        } else if case_sensitive {
+            // ---- 字面量 + 大小写敏感搜索 ----
+            // 使用 memchr::memmem::find 在 original_texts 上精确匹配（needle 不小写化）
+            let needle = query.as_bytes();
+
+            let results: Vec<String> = if n < PARALLEL_THRESHOLD {
+                // 小数组：顺序迭代
+                entry
+                    .original_texts
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, text)| memchr::memmem::find(text.as_bytes(), needle).is_some())
+                    .map(|(i, _)| dm[i].display_id.clone())
+                    .collect()
+            } else {
+                // 大数组：rayon 并行迭代
+                entry
+                    .original_texts
+                    .par_iter()
+                    .enumerate()
+                    .filter(|(_, text)| memchr::memmem::find(text.as_bytes(), needle).is_some())
+                    .map(|(i, _)| dm[i].display_id.clone())
+                    .collect()
+            };
+
+            Ok(Some(results))
+        } else {
+            // ---- 字面量 + 大小写不敏感搜索（原有逻辑）----
+            // 在预计算的小写化 search_texts 上匹配，needle 也需小写化
+            let needle_lower = query.to_lowercase();
+            let needle = needle_lower.as_bytes();
+
+            let results: Vec<String> = if n < PARALLEL_THRESHOLD {
+                // 小数组：顺序迭代
+                entry
+                    .search_texts
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, text)| memchr::memmem::find(text.as_bytes(), needle).is_some())
+                    .map(|(i, _)| dm[i].display_id.clone())
+                    .collect()
+            } else {
+                // 大数组：rayon 并行迭代，SIMD memchr 加速
+                entry
+                    .search_texts
+                    .par_iter()
+                    .enumerate()
+                    .filter(|(_, text)| memchr::memmem::find(text.as_bytes(), needle).is_some())
+                    .map(|(i, _)| dm[i].display_id.clone())
+                    .collect()
+            };
+
+            Ok(Some(results))
+        }
     }
 }
 

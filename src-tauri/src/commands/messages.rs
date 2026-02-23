@@ -55,10 +55,10 @@ pub async fn read_session_messages(
     let messages = parser::read_messages(&session_file_path).await?;
 
     // 转换为 TransformedSession + 搜索文本
-    let (transformed, search_texts) = transformer::transform_session(&messages);
+    let (transformed, search_texts, original_texts) = transformer::transform_session(&messages);
 
     // 存入缓存
-    cache.set_session(&session_file_path, transformed.clone(), search_texts);
+    cache.set_session(&session_file_path, transformed.clone(), search_texts, original_texts);
 
     Ok(transformed)
 }
@@ -102,8 +102,8 @@ pub async fn delete_message(
     parser::write_messages(&session_file_path, &filtered).await?;
 
     // 重新 transform 并更新缓存
-    let (transformed, search_texts) = transformer::transform_session(&filtered);
-    cache.set_session(&session_file_path, transformed.clone(), search_texts);
+    let (transformed, search_texts, original_texts) = transformer::transform_session(&filtered);
+    cache.set_session(&session_file_path, transformed.clone(), search_texts, original_texts);
 
     Ok(transformed)
 }
@@ -151,8 +151,8 @@ pub async fn delete_messages(
     parser::write_messages(&session_file_path, &filtered).await?;
 
     // 重新 transform 并更新缓存
-    let (transformed, search_texts) = transformer::transform_session(&filtered);
-    cache.set_session(&session_file_path, transformed.clone(), search_texts);
+    let (transformed, search_texts, original_texts) = transformer::transform_session(&filtered);
+    cache.set_session(&session_file_path, transformed.clone(), search_texts, original_texts);
 
     Ok(transformed)
 }
@@ -304,8 +304,8 @@ pub async fn edit_message_content(
     parser::write_messages(&session_file_path, &updated).await?;
 
     // 重新 transform 并更新缓存
-    let (transformed, search_texts) = transformer::transform_session(&updated);
-    cache.set_session(&session_file_path, transformed.clone(), search_texts);
+    let (transformed, search_texts, original_texts) = transformer::transform_session(&updated);
+    cache.set_session(&session_file_path, transformed.clone(), search_texts, original_texts);
 
     Ok(transformed)
 }
@@ -339,42 +339,54 @@ pub async fn delete_session(
 
 /// 在缓存中搜索会话消息
 ///
-/// 在 Rust 端使用 memchr SIMD 加速搜索预计算的小写化文本，
-/// 仅返回匹配的 display_id 列表，避免大量文本通过 IPC 传输。
+/// 在 Rust 端搜索预计算的搜索文本，仅返回匹配的 display_id 列表，
+/// 避免大量文本通过 IPC 传输。
+///
+/// 支持 4 种搜索模式（由 `case_sensitive` 和 `use_regex` 组合决定）：
+/// - 字面量 + 大小写不敏感（默认）：memchr SIMD 加速，在小写化 search_texts 上匹配
+/// - 字面量 + 大小写敏感：memchr SIMD 加速，在 original_texts 上精确匹配
+/// - 正则 + 大小写不敏感：`(?i)pattern` 正则，在 original_texts 上匹配
+/// - 正则 + 大小写敏感：`pattern` 正则，在 original_texts 上匹配
 ///
 /// 如果缓存中没有该会话的数据，会先加载并缓存。
 ///
 /// # 参数
 /// - `session_file_path` - 会话 JSONL 文件的绝对路径
 /// - `query` - 搜索查询词
+/// - `case_sensitive` - 是否大小写敏感
+/// - `use_regex` - 是否使用正则表达式模式
 /// - `cache` - Tauri managed state，内存缓存
 ///
 /// # 返回值
 /// 返回匹配的 display_id 字符串列表
 ///
 /// # 错误
-/// 会话数据加载失败时返回错误
+/// - 会话数据加载失败时返回错误
+/// - 正则表达式编译失败时返回错误（包含无效 pattern 详情）
 #[tauri::command]
 pub async fn search_session(
     session_file_path: String,
     query: String,
+    case_sensitive: bool,
+    use_regex: bool,
     cache: State<'_, AppCache>,
 ) -> Result<Vec<String>, String> {
-    // 空查询返回空结果
+    // 空查询返回空结果（trim 后判断，避免纯空白字符查询）
     if query.trim().is_empty() {
         return Ok(vec![]);
     }
 
-    // 确保缓存中有数据
+    // 确保缓存中有数据（缓存预热）
     if cache.get_session(&session_file_path).is_none() {
         let messages = parser::read_messages(&session_file_path).await?;
-        let (transformed, search_texts) = transformer::transform_session(&messages);
-        cache.set_session(&session_file_path, transformed, search_texts);
+        let (transformed, search_texts, original_texts) = transformer::transform_session(&messages);
+        cache.set_session(&session_file_path, transformed, search_texts, original_texts);
     }
 
-    // 在缓存中搜索（SIMD memchr 加速）
+    // 在缓存中执行搜索，处理 Err（正则编译失败）和 None（缓存未命中）两种失败情形
     cache
-        .search_in_cache(&session_file_path, &query)
+        .search_in_cache(&session_file_path, &query, case_sensitive, use_regex)
+        .map_err(|e| e)?          // 将正则错误直接传递给前端
         .ok_or_else(|| "会话未在缓存中找到".into())
 }
 

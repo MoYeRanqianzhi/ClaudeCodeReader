@@ -440,6 +440,36 @@
     border-right-color: #ec4899;
   }
 
+  /* ---------- 搜索匹配文本高亮 ---------- */
+
+  /* 搜索匹配文本高亮：黄色半透明背景，用于标记导航搜索命中的文本片段 */
+  .search-highlight {
+    background-color: rgba(250, 204, 21, 0.4);
+    border-radius: 2px;
+    padding: 0 1px;
+  }
+  .dark .search-highlight {
+    background-color: rgba(234, 179, 8, 0.3);
+  }
+
+  /* ---------- 搜索导航闪烁动画 ---------- */
+
+  /* 搜索导航定位闪烁：消息卡片边框闪烁 3 次，引导用户注意力 */
+  .search-flash {
+    animation: search-flash-blink 0.3s ease-in-out 3;
+  }
+  @keyframes search-flash-blink {
+    0%, 100% { box-shadow: 0 0 0 0 transparent; }
+    50% { box-shadow: 0 0 0 3px rgba(250, 204, 21, 0.5); }
+  }
+  .dark .search-flash {
+    animation: search-flash-blink-dark 0.3s ease-in-out 3;
+  }
+  @keyframes search-flash-blink-dark {
+    0%, 100% { box-shadow: 0 0 0 0 transparent; }
+    50% { box-shadow: 0 0 0 3px rgba(234, 179, 8, 0.4); }
+  }
+
   /* ---------- Tailwind CSS 工具类后备 ---------- */
   /* 确保核心布局类在 JIT 引擎未扫描到时仍然可用 */
   .flex { display: flex; }

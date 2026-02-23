@@ -16,7 +16,7 @@
 
 import { memo } from 'react';
 import { Lightbulb } from 'lucide-react';
-import type { MessageContent, ToolUseInfo } from '../types/claude';
+import type { MessageContent, ToolUseInfo, SearchHighlight } from '../types/claude';
 import { ToolUseRenderer } from './ToolUseRenderer';
 import { ToolResultRenderer } from './ToolResultRenderer';
 import { MarkdownRenderer } from './MarkdownRenderer';
@@ -31,6 +31,12 @@ interface MessageContentRendererProps {
   projectPath: string;
   /** tool_use_id → ToolUseInfo 映射（Rust HashMap 序列化为 Record） */
   toolUseMap: Record<string, ToolUseInfo>;
+  /**
+   * 搜索高亮选项。
+   * 非空时，穿透到 MarkdownRenderer 和 ToolResultRenderer 中高亮匹配文本。
+   * 支持字面量（大小写敏感/不敏感）和正则表达式模式。
+   */
+  searchHighlight?: SearchHighlight;
 }
 
 /**
@@ -49,13 +55,13 @@ interface MessageContentRendererProps {
  * @param props - 包含待渲染的内容块对象
  * @returns 渲染后的 JSX 元素
  */
-export const MessageContentRenderer = memo(function MessageContentRenderer({ block, projectPath, toolUseMap }: MessageContentRendererProps) {
+export const MessageContentRenderer = memo(function MessageContentRenderer({ block, projectPath, toolUseMap, searchHighlight }: MessageContentRendererProps) {
   switch (block.type) {
     /* ====== 文本内容块（Markdown 渲染） ====== */
     case 'text':
       return (
         <div className="animate-msg-in">
-          <MarkdownRenderer content={block.text || ''} />
+          <MarkdownRenderer content={block.text || ''} searchHighlight={searchHighlight} />
         </div>
       );
 
@@ -76,6 +82,7 @@ export const MessageContentRenderer = memo(function MessageContentRenderer({ blo
           toolUseMap={toolUseMap}
           projectPath={projectPath}
           isError={block.is_error}
+          searchHighlight={searchHighlight}
         />
       );
 
@@ -87,7 +94,7 @@ export const MessageContentRenderer = memo(function MessageContentRenderer({ blo
             <Lightbulb className="w-4 h-4 inline-block shrink-0" /> 思考过程
           </summary>
           <div className="mt-2 italic opacity-70">
-            <MarkdownRenderer content={block.thinking || block.text || ''} />
+            <MarkdownRenderer content={block.thinking || block.text || ''} searchHighlight={searchHighlight} />
           </div>
         </details>
       );
