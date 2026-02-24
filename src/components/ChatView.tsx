@@ -1194,8 +1194,9 @@ export function ChatView({
       const wrapper = scrollContainerRef.current?.querySelector(`[data-msg-index="${targetIdx}"]`);
       if (!wrapper) return;
 
-      // 滚动到目标消息
-      wrapper.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      // 瞬间定位到目标消息（不使用 smooth，避免滚动期间闪烁动画已经开始播放）
+      // 搜索导航应该是即时跳转，与 VS Code Ctrl+F 行为一致
+      wrapper.scrollIntoView({ behavior: 'instant', block: 'center' });
 
       // 查找闪烁目标元素：优先找内部带 data-flash-target 的元素，否则用 wrapper 自身
       const flashTarget = wrapper.querySelector('[data-flash-target]') as HTMLElement | null ?? wrapper as HTMLElement;
