@@ -313,7 +313,13 @@ export function useProgressiveRender(
     let lastHeight = 0;
     let stableFrames = 0;
     let attempts = 0;
-    const maxAttempts = 10;
+    /**
+     * 最多轮询 30 帧（约 500ms）。
+     * 原来的 10 帧（~167ms）不够等待初始批次渲染：
+     * useProgressiveRender 的 version bump → React 重渲染 → DOM 更新
+     * 这一流程可能跨越多帧，10 帧内 scrollHeight 可能还未稳定。
+     */
+    const maxAttempts = 30;
 
     const poll = () => {
       const currentHeight = el.scrollHeight;

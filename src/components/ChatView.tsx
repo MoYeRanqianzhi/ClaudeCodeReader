@@ -543,7 +543,18 @@ const MessageItem = memo(function MessageItem({
   onNavigateToSession,
 }: MessageItemProps) {
   return (
-    <div data-msg-index={index}>
+    <div
+      data-msg-index={index}
+      className={
+        /* 入场动画仅对普通消息生效（compact_summary 使用 framer-motion，system 不需要动画）。
+         * 关键：animate-msg-in 必须放在 wrapper 上而非 data-flash-target 上，
+         * 因为两者都设置 CSS animation 简写属性，放在同一元素会导致 search-flash
+         * 被移除时 msg-in 动画重启（opacity: 0→1），产生视觉闪烁。 */
+        msg.displayType !== 'compact_summary' && msg.displayType !== 'system'
+          ? 'animate-msg-in'
+          : undefined
+      }
+    >
       {isRendered ? (
         /* ====== 已渲染：完整消息内容 ====== */
         msg.displayType === 'compact_summary' ? (
@@ -567,7 +578,7 @@ const MessageItem = memo(function MessageItem({
         ) :
         <div
           data-flash-target
-          className={`rounded-xl p-4 message-bubble animate-msg-in ${
+          className={`rounded-xl p-4 message-bubble ${
             msg.displayType === 'user'
               ? 'bg-primary/5 border border-primary/10'
               : msg.displayType === 'tool_result'
@@ -995,12 +1006,19 @@ export function ChatView({
   /**
    * 仅在切换到不同会话时自动滚动到底部。
    * 同一会话的数据更新（编辑保存、手动刷新）不触发滚动，保持用户当前阅读位置。
+   *
+   * 使用 setTimeout(0) 延迟调用 scrollToBottom：
+   * useProgressiveRender 在 totalCount 变化时通过 setVersion() 触发重渲染，
+   * 但该 version bump 与本 effect 在同一个 React 渲染周期内运行。
+   * 如果立即调用 scrollToBottom，其 rAF 轮询会在初始批次消息渲染到 DOM 之前开始，
+   * 导致 scrollHeight 在占位符阶段就被误判为"稳定"，过早执行滚动。
+   * setTimeout(0) 将调用推迟到 React 处理完 version bump 重渲染之后。
    */
   useEffect(() => {
     if (transformedSession && session) {
       if (prevSessionPathRef.current !== session.filePath) {
         prevSessionPathRef.current = session.filePath;
-        scrollToBottom();
+        setTimeout(() => scrollToBottom(), 0);
       }
     } else if (!session) {
       prevSessionPathRef.current = null;
@@ -1188,20 +1206,18 @@ export function ChatView({
       void flashTarget.offsetWidth;
       flashTarget.classList.add('search-flash');
 
-      // animationend 事件自动清除 class。
-      // 必须检查 animationName：子元素的 animate-msg-in 等动画结束时
-      // animationend 会冒泡到此元素，若不过滤会提前移除 search-flash。
-      const handleAnimEnd = (e: AnimationEvent) => {
-        if (e.animationName === 'search-flash-blink' || e.animationName === 'search-flash-blink-dark') {
-          flashTarget.classList.remove('search-flash');
-        }
-      };
-      flashTarget.addEventListener('animationend', handleAnimEnd as EventListener);
+      // 使用 setTimeout 而非 animationend 清除 class。
+      // 原因：animationend 会被子元素的 animate-msg-in 等动画冒泡触发，
+      // 即使检查 animationName 仍有 CSS 动画属性覆盖导致的可靠性问题。
+      // 计时：0.3s × 3次 = 0.9s，加 0.1s 余量 = 1秒。
+      const flashTimer = setTimeout(() => {
+        flashTarget.classList.remove('search-flash');
+      }, 1000);
 
       // 保存清理函数，供下次导航或关闭搜索时调用
       flashCleanupRef.current = () => {
+        clearTimeout(flashTimer);
         flashTarget.classList.remove('search-flash');
-        flashTarget.removeEventListener('animationend', handleAnimEnd as EventListener);
       };
     };
 
