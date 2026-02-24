@@ -14,7 +14,7 @@
  *              替代内联 SVG，以提升一致性和可维护性。
  */
 
-import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import { useState, useRef, useEffect, useMemo, useCallback, memo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   ChevronRight, ChevronDown, ChevronUp, X, CheckSquare, Square, Filter,
@@ -419,6 +419,368 @@ function SystemMessageBlock({
   );
 }
 
+// ==================== 工具函数（组件外部，可被 MessageItem 引用） ====================
+
+/**
+ * 将指定文本复制到系统剪贴板。
+ */
+function copyToClipboard(text: string) {
+  navigator.clipboard.writeText(text);
+}
+
+/**
+ * 获取 DisplayMessage 的文本内容，用于复制到剪贴板。
+ * 直接从 content 块中提取文本，不依赖 rawMessage。
+ */
+function getDisplayText(msg: DisplayMessage): string {
+  return msg.content.map(block => {
+    if (block.type === 'text' && block.text) return block.text;
+    if (block.type === 'thinking' && (block.thinking || block.text)) return block.thinking || block.text;
+    if (block.type === 'tool_result') {
+      if (typeof block.content === 'string') return block.content;
+      if (Array.isArray(block.content)) {
+        return (block.content as Array<{ text?: string }>).map(b => b.text || '').join('\n');
+      }
+    }
+    return '';
+  }).filter(Boolean).join('\n');
+}
+
+// ==================== MessageItem：带 memo 的消息渲染组件 ====================
+
+/**
+ * MessageItem 属性接口。
+ *
+ * 关键设计：所有集合判断（Set.has、=== id）在父组件 map 中预计算为 boolean，
+ * 确保 memo 浅比较能正确判断 props 是否变化。
+ */
+interface MessageItemProps {
+  /** 消息对象 */
+  msg: DisplayMessage;
+  /** 在 visibleMessages 中的索引（用于 data-msg-index） */
+  index: number;
+  /** 是否已渲染完整内容（由 useProgressiveRender 控制） */
+  isRendered: boolean;
+  /** 项目根目录路径 */
+  projectPath: string;
+  /** 工具调用映射表 */
+  toolUseMap: Record<string, ToolUseInfo>;
+  /** 搜索高亮选项（仅匹配消息传入，非匹配传 undefined） */
+  searchHighlight?: SearchHighlight;
+  /** 是否需要自动展开（仅 compact_summary / system 类型有效） */
+  searchAutoExpand: boolean;
+  /** 是否处于多选模式 */
+  selectionMode: boolean;
+  /** 此消息是否被选中 */
+  isSelected: boolean;
+  /** 此消息是否正在编辑 */
+  isEditing: boolean;
+  /** 编辑状态的块数据（仅 isEditing 时有效） */
+  editBlocks: { index: number; type: string; text: string }[];
+  /** 切换消息选中状态的回调 */
+  onToggleSelect: (uuid: string) => void;
+  /** 删除消息的回调 */
+  onDeleteMessage: (uuid: string) => void;
+  /** 开始编辑消息的回调 */
+  onStartEdit: (msg: DisplayMessage) => void;
+  /** 保存编辑的回调 */
+  onSaveEdit: () => void;
+  /** 取消编辑的回调 */
+  onCancelEdit: () => void;
+  /** 编辑块数据变更回调（直接传 setEditBlocks） */
+  onEditBlockChange: (blocks: { index: number; type: string; text: string }[]) => void;
+  /** 跳转到指定会话的回调（system 消息的计划跳转使用） */
+  onNavigateToSession: (encodedProject: string, sessionId: string) => Promise<boolean>;
+}
+
+/**
+ * 自定义 memo 比较器：只比较数据 props，忽略函数 props。
+ *
+ * 函数 props（onToggleSelect、onDeleteMessage 等）的引用可能因父组件 re-render 而变化，
+ * 但其行为不变。忽略它们可避免因引用不稳定导致的无效重渲染。
+ * editBlocks 仅在 isEditing 为 true 时才需要比较。
+ */
+function messageItemAreEqual(prev: MessageItemProps, next: MessageItemProps): boolean {
+  return prev.msg === next.msg
+    && prev.index === next.index
+    && prev.isRendered === next.isRendered
+    && prev.projectPath === next.projectPath
+    && prev.toolUseMap === next.toolUseMap
+    && prev.searchHighlight === next.searchHighlight
+    && prev.searchAutoExpand === next.searchAutoExpand
+    && prev.selectionMode === next.selectionMode
+    && prev.isSelected === next.isSelected
+    && prev.isEditing === next.isEditing
+    && (!next.isEditing || prev.editBlocks === next.editBlocks);
+}
+
+/**
+ * MessageItem - 单条消息的 memo 渲染组件。
+ *
+ * 每条消息独立 memo：ChatView 中任何 state 变化触发 map 重新执行时，
+ * 只有 props 实际变化的消息会重渲染。搜索导航场景下，
+ * 300+ 条消息中通常只有 0~2 条的 searchAutoExpand 变化，
+ * 其余全部被 memo 跳过，将重渲染耗时从秒级降至 ~50ms。
+ */
+const MessageItem = memo(function MessageItem({
+  msg,
+  index,
+  isRendered,
+  projectPath,
+  toolUseMap,
+  searchHighlight,
+  searchAutoExpand,
+  selectionMode,
+  isSelected,
+  isEditing,
+  editBlocks,
+  onToggleSelect,
+  onDeleteMessage,
+  onStartEdit,
+  onSaveEdit,
+  onCancelEdit,
+  onEditBlockChange,
+  onNavigateToSession,
+}: MessageItemProps) {
+  return (
+    <div data-msg-index={index}>
+      {isRendered ? (
+        /* ====== 已渲染：完整消息内容 ====== */
+        msg.displayType === 'compact_summary' ? (
+          <CompactSummaryBlock
+            msg={msg}
+            projectPath={projectPath}
+            toolUseMap={toolUseMap}
+            searchHighlight={searchHighlight}
+            searchAutoExpand={searchAutoExpand}
+          />
+        ) :
+        msg.displayType === 'system' ? (
+          <SystemMessageBlock
+            msg={msg}
+            projectPath={projectPath}
+            toolUseMap={toolUseMap}
+            onNavigateToSession={onNavigateToSession}
+            searchHighlight={searchHighlight}
+            searchAutoExpand={searchAutoExpand}
+          />
+        ) :
+        <div
+          data-flash-target
+          className={`rounded-xl p-4 message-bubble animate-msg-in ${
+            msg.displayType === 'user'
+              ? 'bg-primary/5 border border-primary/10'
+              : msg.displayType === 'tool_result'
+                ? 'bg-emerald-500/5 border border-emerald-500/10'
+                : 'bg-muted/50 border border-border'
+          } ${isSelected ? 'ring-2 ring-primary' : ''}`}
+          onClick={selectionMode ? () => onToggleSelect(msg.sourceUuid) : undefined}
+          style={selectionMode ? { cursor: 'pointer' } : undefined}
+        >
+          {/* 消息头部 */}
+          <div className="flex items-center justify-between mb-2 group">
+            <div className="flex items-center gap-2">
+              {selectionMode && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onToggleSelect(msg.sourceUuid);
+                  }}
+                  className="text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  {isSelected ? (
+                    <CheckSquare className="w-4 h-4 text-primary" />
+                  ) : (
+                    <Square className="w-4 h-4" />
+                  )}
+                </button>
+              )}
+              <span
+                className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                  msg.displayType === 'user'
+                    ? 'bg-primary text-primary-foreground'
+                    : msg.displayType === 'tool_result'
+                      ? 'bg-emerald-600 text-white'
+                      : 'bg-secondary text-secondary-foreground'
+                }`}
+              >
+                {msg.displayType === 'user' ? (
+                  <User className="w-3 h-3" />
+                ) : msg.displayType === 'tool_result' ? (
+                  <Wrench className="w-3 h-3" />
+                ) : (
+                  <Bot className="w-3 h-3" />
+                )}
+                {msg.displayType === 'user'
+                  ? '用户'
+                  : msg.displayType === 'tool_result'
+                    ? '工具结果'
+                    : '助手'}
+              </span>
+              <span className="text-xs text-muted-foreground">
+                {formatTimestamp(msg.timestamp)}
+              </span>
+              {/* 模型信息：直接从 DisplayMessage 字段获取 */}
+              {msg.model && msg.displayType === 'assistant' && (
+                <span className="text-xs text-muted-foreground">
+                  模型: {msg.model}
+                </span>
+              )}
+            </div>
+            {!selectionMode && (
+              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button
+                  onClick={() => copyToClipboard(getDisplayText(msg))}
+                  className="p-1.5 rounded hover:bg-accent transition-all hover:scale-110 active:scale-90"
+                  title="复制"
+                >
+                  <Copy className="w-4 h-4" />
+                </button>
+                {msg.editable && (
+                <button
+                  onClick={() => onStartEdit(msg)}
+                  className="p-1.5 rounded hover:bg-accent transition-all hover:scale-110 active:scale-90"
+                  title="编辑"
+                >
+                  <Edit2 className="w-4 h-4" />
+                </button>
+                )}
+                <button
+                  onClick={() => onDeleteMessage(msg.sourceUuid)}
+                  className="p-1.5 rounded hover:bg-destructive/10 text-destructive transition-all hover:scale-110 active:scale-90"
+                  title="删除"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* 消息内容 */}
+          {isEditing ? (
+            <div className="space-y-2">
+              {editBlocks.map((block, blockIdx) => (
+                <div key={blockIdx}>
+                  {block.type === 'thinking' ? (
+                    <div className="thinking-block">
+                      <div className="flex items-center gap-1 text-xs font-medium mb-2 opacity-70">
+                        <Lightbulb className="w-4 h-4 shrink-0" /> 思考过程
+                      </div>
+                      <textarea
+                        value={block.text}
+                        onChange={(e) => {
+                          const next = [...editBlocks];
+                          next[blockIdx] = { ...block, text: e.target.value };
+                          onEditBlockChange(next);
+                        }}
+                        className="w-full p-2 rounded bg-transparent text-foreground border border-purple-300/40 dark:border-purple-500/30 focus:outline-none focus:ring-2 focus:ring-purple-400/50 min-h-[80px] resize-y text-sm italic opacity-85"
+                      />
+                    </div>
+                  ) : block.type === 'tool_use' ? (
+                    <div className="rounded-lg border border-blue-300/30 dark:border-blue-500/20 bg-blue-50/30 dark:bg-blue-950/20 p-3">
+                      <div className="flex items-center gap-1 text-xs font-medium mb-2 text-blue-600 dark:text-blue-400">
+                        <Wrench className="w-4 h-4 shrink-0" /> 工具调用参数 (JSON)
+                      </div>
+                      <textarea
+                        value={block.text}
+                        onChange={(e) => {
+                          const next = [...editBlocks];
+                          next[blockIdx] = { ...block, text: e.target.value };
+                          onEditBlockChange(next);
+                        }}
+                        className="w-full p-2 rounded bg-transparent text-foreground border border-blue-300/40 dark:border-blue-500/30 focus:outline-none focus:ring-2 focus:ring-blue-400/50 min-h-[80px] resize-y text-sm font-mono"
+                      />
+                    </div>
+                  ) : block.type === 'tool_result' ? (
+                    <div className="rounded-lg border border-emerald-300/30 dark:border-emerald-500/20 bg-emerald-50/30 dark:bg-emerald-950/20 p-3">
+                      <div className="flex items-center gap-1 text-xs font-medium mb-2 text-emerald-600 dark:text-emerald-400">
+                        <Wrench className="w-4 h-4 shrink-0" /> 工具结果
+                      </div>
+                      <textarea
+                        value={block.text}
+                        onChange={(e) => {
+                          const next = [...editBlocks];
+                          next[blockIdx] = { ...block, text: e.target.value };
+                          onEditBlockChange(next);
+                        }}
+                        className="w-full p-2 rounded bg-transparent text-foreground border border-emerald-300/40 dark:border-emerald-500/30 focus:outline-none focus:ring-2 focus:ring-emerald-400/50 min-h-[80px] resize-y text-sm font-mono"
+                      />
+                    </div>
+                  ) : (
+                    <textarea
+                      value={block.text}
+                      onChange={(e) => {
+                        const next = [...editBlocks];
+                        next[blockIdx] = { ...block, text: e.target.value };
+                        onEditBlockChange(next);
+                      }}
+                      className="w-full p-3 rounded-lg bg-background text-foreground border border-border focus:outline-none focus:ring-2 focus:ring-ring min-h-[100px] resize-y"
+                    />
+                  )}
+                </div>
+              ))}
+              {msg.content.some(b =>
+                b.type !== 'text' && b.type !== 'thinking' &&
+                b.type !== 'tool_use' && b.type !== 'tool_result'
+              ) && (
+                <div className="prose prose-sm dark:prose-invert max-w-none opacity-60">
+                  {msg.content
+                    .filter(b =>
+                      b.type !== 'text' && b.type !== 'thinking' &&
+                      b.type !== 'tool_use' && b.type !== 'tool_result'
+                    )
+                    .map((block, idx) => (
+                      <MessageContentRenderer
+                        key={idx}
+                        block={block}
+                        projectPath={projectPath}
+                        toolUseMap={toolUseMap}
+                      />
+                    ))}
+                </div>
+              )}
+              <div className="flex justify-end gap-2">
+                <button
+                  onClick={onCancelEdit}
+                  className="px-3 py-1.5 rounded-lg bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={onSaveEdit}
+                  className="px-3 py-1.5 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+                >
+                  保存
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="prose prose-sm dark:prose-invert max-w-none">
+              <MessageBlockList
+                content={msg.content}
+                projectPath={projectPath}
+                toolUseMap={toolUseMap}
+                searchHighlight={searchHighlight}
+              />
+            </div>
+          )}
+
+          {/* Token 使用量：直接从 DisplayMessage 字段获取 */}
+          {msg.displayType === 'assistant' && msg.usage && (
+            <div className="mt-2 pt-2 border-t border-border/50 text-xs text-muted-foreground">
+              输入: {msg.usage.input_tokens} tokens · 输出:{' '}
+              {msg.usage.output_tokens} tokens
+            </div>
+          )}
+        </div>
+      ) : (
+        /* ====== 未渲染：轻量占位符（固定高度，确保 scrollHeight 稳定） ====== */
+        <div className="h-[60px]" />
+      )}
+    </div>
+  );
+}, messageItemAreEqual);
+
 /**
  * 筛选器配置项：类型 → 图标 + 标签
  */
@@ -510,12 +872,6 @@ export function ChatView({
    * 完全脱离 React 渲染周期，避免重渲染重启 CSS 动画。
    */
   const flashCleanupRef = useRef<(() => void) | null>(null);
-  /**
-   * 搜索导航自动展开的消息 displayId。
-   * 当搜索导航跳转到折叠消息（compact_summary / system）时设置，
-   * 导航离开时清除 → 触发子组件自动收起（仅限自动展开的情况）。
-   */
-  const [searchAutoExpandId, setSearchAutoExpandId] = useState<string | null>(null);
   /** NavSearchBar 组件的命令式引用（focus / reset） */
   const navSearchBarRef = useRef<NavSearchBarHandle>(null);
   /**
@@ -606,6 +962,21 @@ export function ChatView({
       .filter(msg => navSearchResultSet.has(msg.displayId))
       .map(msg => msg.displayId);
   }, [navSearchResultSet, visibleMessages]);
+
+  /**
+   * 搜索导航自动展开的消息 displayId（派生值，非 state）。
+   *
+   * 从 currentMatchIndex 同步派生，避免额外的 setState 导致二次重渲染。
+   * 当搜索导航跳转到折叠消息（compact_summary / system）时非 null，否则 null。
+   */
+  const searchAutoExpandId = useMemo(() => {
+    if (currentMatchIndex < 0 || currentMatchIndex >= navSearchMatchIds.length) return null;
+    const targetDisplayId = navSearchMatchIds[currentMatchIndex];
+    const targetMsg = visibleMessages.find(msg => msg.displayId === targetDisplayId);
+    if (!targetMsg) return null;
+    const isCollapsible = targetMsg.displayType === 'compact_summary' || targetMsg.displayType === 'system';
+    return isCollapsible ? targetDisplayId : null;
+  }, [currentMatchIndex, navSearchMatchIds, visibleMessages]);
 
   /**
    * 渐进式渲染：视口驱动，先渲染可视区域，空闲时向外扩散。
@@ -766,16 +1137,16 @@ export function ChatView({
       flashCleanupRef.current();
       flashCleanupRef.current = null;
     }
-    setSearchAutoExpandId(null);
+    // searchAutoExpandId 是 useMemo 派生值，currentMatchIndex=-1 时自动为 null
     setSearchHighlight(undefined);
     navSearchBarRef.current?.reset();
   }, []);
 
   /**
-   * 导航跳转 + 闪烁效果 + 自动展开折叠消息：
+   * 导航跳转 + 闪烁效果：
    * currentMatchIndex 变化时，自动滚动到目标消息并触发闪烁动画。
-   * 如果目标消息是折叠类型（compact_summary / system），自动展开。
    *
+   * 自动展开由 searchAutoExpandId（useMemo 派生值）驱动，无需在此 effect 中处理。
    * 闪烁动画使用直接 DOM 操作（classList.add/remove），
    * 完全脱离 React 渲染周期，避免 setState 触发重渲染导致 CSS 动画重启。
    */
@@ -787,8 +1158,6 @@ export function ChatView({
     }
 
     if (currentMatchIndex < 0 || currentMatchIndex >= navSearchMatchIds.length) {
-      // 无匹配时清除自动展开
-      setSearchAutoExpandId(null);
       return;
     }
     const targetDisplayId = navSearchMatchIds[currentMatchIndex];
@@ -799,9 +1168,8 @@ export function ChatView({
     // 1. 确保目标消息已渲染
     forceRenderIndex(targetIdx);
 
-    // 2. 自动展开折叠消息（compact_summary / system）
+    // 2. 判断是否为折叠类型（用于延迟滚动等待展开动画）
     const isCollapsible = targetMsg.displayType === 'compact_summary' || targetMsg.displayType === 'system';
-    setSearchAutoExpandId(isCollapsible ? targetDisplayId : null);
 
     // 3. 滚动 + 闪烁（直接 DOM 操作，不触发 React 重渲染）
     const doScrollAndFlash = () => {
@@ -937,31 +1305,6 @@ export function ChatView({
     setEditingId(null);
     setEditingSourceUuid(null);
     setEditBlocks([]);
-  };
-
-  /**
-   * 将指定文本复制到系统剪贴板。
-   */
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
-  };
-
-  /**
-   * 获取 DisplayMessage 的文本内容，用于复制到剪贴板。
-   * 直接从 content 块中提取文本，不依赖 rawMessage。
-   */
-  const getDisplayText = (msg: DisplayMessage): string => {
-    return msg.content.map(block => {
-      if (block.type === 'text' && block.text) return block.text;
-      if (block.type === 'thinking' && (block.thinking || block.text)) return block.thinking || block.text;
-      if (block.type === 'tool_result') {
-        if (typeof block.content === 'string') return block.content;
-        if (Array.isArray(block.content)) {
-          return (block.content as Array<{ text?: string }>).map(b => b.text || '').join('\n');
-        }
-      }
-      return '';
-    }).filter(Boolean).join('\n');
   };
 
   /* 空状态：未选择任何会话时显示引导界面 */
@@ -1302,244 +1645,27 @@ export function ChatView({
           <div className="text-center text-muted-foreground py-8">没有消息</div>
         ) : (
           visibleMessages.map((msg, index) => (
-            <div
+            <MessageItem
               key={msg.displayId}
-              data-msg-index={index}
-            >
-              {isRendered(index) ? (
-                /* ====== 已渲染：完整消息内容 ====== */
-                msg.displayType === 'compact_summary' ? (
-                  <CompactSummaryBlock
-                    msg={msg}
-                    projectPath={projectPath}
-                    toolUseMap={toolUseMap}
-                    searchHighlight={navSearchResultSet.has(msg.displayId) ? searchHighlight : undefined}
-                    searchAutoExpand={searchAutoExpandId === msg.displayId}
-                  />
-                ) :
-                msg.displayType === 'system' ? (
-                  <SystemMessageBlock
-                    msg={msg}
-                    projectPath={projectPath}
-                    toolUseMap={toolUseMap}
-                    onNavigateToSession={onNavigateToSession}
-                    searchHighlight={navSearchResultSet.has(msg.displayId) ? searchHighlight : undefined}
-                    searchAutoExpand={searchAutoExpandId === msg.displayId}
-                  />
-                ) :
-            <div
-              data-flash-target
-              className={`rounded-xl p-4 message-bubble animate-msg-in ${
-                msg.displayType === 'user'
-                  ? 'bg-primary/5 border border-primary/10'
-                  : msg.displayType === 'tool_result'
-                    ? 'bg-emerald-500/5 border border-emerald-500/10'
-                    : 'bg-muted/50 border border-border'
-              } ${selectionMode && selectedMessages.has(msg.sourceUuid) ? 'ring-2 ring-primary' : ''}`}
-              onClick={selectionMode ? () => onToggleSelect(msg.sourceUuid) : undefined}
-              style={selectionMode ? { cursor: 'pointer' } : undefined}
-            >
-              {/* 消息头部 */}
-              <div className="flex items-center justify-between mb-2 group">
-                <div className="flex items-center gap-2">
-                  {selectionMode && (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onToggleSelect(msg.sourceUuid);
-                      }}
-                      className="text-muted-foreground hover:text-foreground transition-colors"
-                    >
-                      {selectedMessages.has(msg.sourceUuid) ? (
-                        <CheckSquare className="w-4 h-4 text-primary" />
-                      ) : (
-                        <Square className="w-4 h-4" />
-                      )}
-                    </button>
-                  )}
-                  <span
-                    className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                      msg.displayType === 'user'
-                        ? 'bg-primary text-primary-foreground'
-                        : msg.displayType === 'tool_result'
-                          ? 'bg-emerald-600 text-white'
-                          : 'bg-secondary text-secondary-foreground'
-                    }`}
-                  >
-                    {msg.displayType === 'user' ? (
-                      <User className="w-3 h-3" />
-                    ) : msg.displayType === 'tool_result' ? (
-                      <Wrench className="w-3 h-3" />
-                    ) : (
-                      <Bot className="w-3 h-3" />
-                    )}
-                    {msg.displayType === 'user'
-                      ? '用户'
-                      : msg.displayType === 'tool_result'
-                        ? '工具结果'
-                        : '助手'}
-                  </span>
-                  <span className="text-xs text-muted-foreground">
-                    {formatTimestamp(msg.timestamp)}
-                  </span>
-                  {/* 模型信息：直接从 DisplayMessage 字段获取 */}
-                  {msg.model && msg.displayType === 'assistant' && (
-                    <span className="text-xs text-muted-foreground">
-                      模型: {msg.model}
-                    </span>
-                  )}
-                </div>
-                {!selectionMode && (
-                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button
-                      onClick={() => copyToClipboard(getDisplayText(msg))}
-                      className="p-1.5 rounded hover:bg-accent transition-all hover:scale-110 active:scale-90"
-                      title="复制"
-                    >
-                      <Copy className="w-4 h-4" />
-                    </button>
-                    {msg.editable && (
-                    <button
-                      onClick={() => handleStartEdit(msg)}
-                      className="p-1.5 rounded hover:bg-accent transition-all hover:scale-110 active:scale-90"
-                      title="编辑"
-                    >
-                      <Edit2 className="w-4 h-4" />
-                    </button>
-                    )}
-                    <button
-                      onClick={() => onDeleteMessage(msg.sourceUuid)}
-                      className="p-1.5 rounded hover:bg-destructive/10 text-destructive transition-all hover:scale-110 active:scale-90"
-                      title="删除"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              {/* 消息内容 */}
-              {editingId === msg.displayId ? (
-                <div className="space-y-2">
-                  {editBlocks.map((block, blockIdx) => (
-                    <div key={blockIdx}>
-                      {block.type === 'thinking' ? (
-                        <div className="thinking-block">
-                          <div className="flex items-center gap-1 text-xs font-medium mb-2 opacity-70">
-                            <Lightbulb className="w-4 h-4 shrink-0" /> 思考过程
-                          </div>
-                          <textarea
-                            value={block.text}
-                            onChange={(e) => {
-                              const next = [...editBlocks];
-                              next[blockIdx] = { ...block, text: e.target.value };
-                              setEditBlocks(next);
-                            }}
-                            className="w-full p-2 rounded bg-transparent text-foreground border border-purple-300/40 dark:border-purple-500/30 focus:outline-none focus:ring-2 focus:ring-purple-400/50 min-h-[80px] resize-y text-sm italic opacity-85"
-                          />
-                        </div>
-                      ) : block.type === 'tool_use' ? (
-                        <div className="rounded-lg border border-blue-300/30 dark:border-blue-500/20 bg-blue-50/30 dark:bg-blue-950/20 p-3">
-                          <div className="flex items-center gap-1 text-xs font-medium mb-2 text-blue-600 dark:text-blue-400">
-                            <Wrench className="w-4 h-4 shrink-0" /> 工具调用参数 (JSON)
-                          </div>
-                          <textarea
-                            value={block.text}
-                            onChange={(e) => {
-                              const next = [...editBlocks];
-                              next[blockIdx] = { ...block, text: e.target.value };
-                              setEditBlocks(next);
-                            }}
-                            className="w-full p-2 rounded bg-transparent text-foreground border border-blue-300/40 dark:border-blue-500/30 focus:outline-none focus:ring-2 focus:ring-blue-400/50 min-h-[80px] resize-y text-sm font-mono"
-                          />
-                        </div>
-                      ) : block.type === 'tool_result' ? (
-                        <div className="rounded-lg border border-emerald-300/30 dark:border-emerald-500/20 bg-emerald-50/30 dark:bg-emerald-950/20 p-3">
-                          <div className="flex items-center gap-1 text-xs font-medium mb-2 text-emerald-600 dark:text-emerald-400">
-                            <Wrench className="w-4 h-4 shrink-0" /> 工具结果
-                          </div>
-                          <textarea
-                            value={block.text}
-                            onChange={(e) => {
-                              const next = [...editBlocks];
-                              next[blockIdx] = { ...block, text: e.target.value };
-                              setEditBlocks(next);
-                            }}
-                            className="w-full p-2 rounded bg-transparent text-foreground border border-emerald-300/40 dark:border-emerald-500/30 focus:outline-none focus:ring-2 focus:ring-emerald-400/50 min-h-[80px] resize-y text-sm font-mono"
-                          />
-                        </div>
-                      ) : (
-                        <textarea
-                          value={block.text}
-                          onChange={(e) => {
-                            const next = [...editBlocks];
-                            next[blockIdx] = { ...block, text: e.target.value };
-                            setEditBlocks(next);
-                          }}
-                          className="w-full p-3 rounded-lg bg-background text-foreground border border-border focus:outline-none focus:ring-2 focus:ring-ring min-h-[100px] resize-y"
-                        />
-                      )}
-                    </div>
-                  ))}
-                  {msg.content.some(b =>
-                    b.type !== 'text' && b.type !== 'thinking' &&
-                    b.type !== 'tool_use' && b.type !== 'tool_result'
-                  ) && (
-                    <div className="prose prose-sm dark:prose-invert max-w-none opacity-60">
-                      {msg.content
-                        .filter(b =>
-                          b.type !== 'text' && b.type !== 'thinking' &&
-                          b.type !== 'tool_use' && b.type !== 'tool_result'
-                        )
-                        .map((block, idx) => (
-                          <MessageContentRenderer
-                            key={idx}
-                            block={block}
-                            projectPath={projectPath}
-                            toolUseMap={toolUseMap}
-                          />
-                        ))}
-                    </div>
-                  )}
-                  <div className="flex justify-end gap-2">
-                    <button
-                      onClick={handleCancelEdit}
-                      className="px-3 py-1.5 rounded-lg bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors"
-                    >
-                      取消
-                    </button>
-                    <button
-                      onClick={handleSaveEdit}
-                      className="px-3 py-1.5 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
-                    >
-                      保存
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="prose prose-sm dark:prose-invert max-w-none">
-                  <MessageBlockList
-                    content={msg.content}
-                    projectPath={projectPath}
-                    toolUseMap={toolUseMap}
-                    searchHighlight={navSearchResultSet.has(msg.displayId) ? searchHighlight : undefined}
-                  />
-                </div>
-              )}
-
-              {/* Token 使用量：直接从 DisplayMessage 字段获取 */}
-              {msg.displayType === 'assistant' && msg.usage && (
-                <div className="mt-2 pt-2 border-t border-border/50 text-xs text-muted-foreground">
-                  输入: {msg.usage.input_tokens} tokens · 输出:{' '}
-                  {msg.usage.output_tokens} tokens
-                </div>
-              )}
-            </div>
-              ) : (
-                /* ====== 未渲染：轻量占位符（固定高度，确保 scrollHeight 稳定） ====== */
-                <div className="h-[60px]" />
-              )}
-            </div>
+              msg={msg}
+              index={index}
+              isRendered={isRendered(index)}
+              projectPath={projectPath}
+              toolUseMap={toolUseMap}
+              searchHighlight={navSearchResultSet.has(msg.displayId) ? searchHighlight : undefined}
+              searchAutoExpand={searchAutoExpandId === msg.displayId}
+              selectionMode={selectionMode}
+              isSelected={selectedMessages.has(msg.sourceUuid)}
+              isEditing={editingId === msg.displayId}
+              editBlocks={editBlocks}
+              onToggleSelect={onToggleSelect}
+              onDeleteMessage={onDeleteMessage}
+              onStartEdit={handleStartEdit}
+              onSaveEdit={handleSaveEdit}
+              onCancelEdit={handleCancelEdit}
+              onEditBlockChange={setEditBlocks}
+              onNavigateToSession={onNavigateToSession}
+            />
           ))
         )}
       </div>
