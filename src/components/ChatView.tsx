@@ -1188,16 +1188,20 @@ export function ChatView({
       void flashTarget.offsetWidth;
       flashTarget.classList.add('search-flash');
 
-      // animationend 事件自动清除 class（比 setTimeout 更精确）
-      const handleAnimEnd = () => {
-        flashTarget.classList.remove('search-flash');
+      // animationend 事件自动清除 class。
+      // 必须检查 animationName：子元素的 animate-msg-in 等动画结束时
+      // animationend 会冒泡到此元素，若不过滤会提前移除 search-flash。
+      const handleAnimEnd = (e: AnimationEvent) => {
+        if (e.animationName === 'search-flash-blink' || e.animationName === 'search-flash-blink-dark') {
+          flashTarget.classList.remove('search-flash');
+        }
       };
-      flashTarget.addEventListener('animationend', handleAnimEnd, { once: true });
+      flashTarget.addEventListener('animationend', handleAnimEnd as EventListener);
 
       // 保存清理函数，供下次导航或关闭搜索时调用
       flashCleanupRef.current = () => {
         flashTarget.classList.remove('search-flash');
-        flashTarget.removeEventListener('animationend', handleAnimEnd);
+        flashTarget.removeEventListener('animationend', handleAnimEnd as EventListener);
       };
     };
 
