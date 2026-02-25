@@ -27,6 +27,7 @@ import { parseJsonlPath } from '../utils/messageTransform';
 import { MessageBlockList } from './MessageBlockList';
 import { MessageContentRenderer } from './MessageContentRenderer';
 import { useProgressiveRender } from '../hooks/useProgressiveRender';
+import { useCollapsible } from '../hooks/useCollapsible';
 import { NavSearchBar, type SearchRequest, type NavSearchBarHandle } from './NavSearchBar';
 
 /**
@@ -85,49 +86,6 @@ interface ChatViewProps {
 
 /** 展开/收起动画的过渡参数 */
 const COMPACT_EXPAND_TRANSITION = { duration: 0.25, ease: 'easeInOut' as const };
-
-/**
- * useCollapsible - 统一的折叠/展开 Hook
- *
- * 为所有可折叠消息组件（compact_summary、system 等）提供标准化的折叠逻辑。
- * 支持两种展开方式：
- * - 搜索导航自动展开：`searchAutoExpand` 为 true 时展开，变回 false 时自动收起
- * - 手动点击展开：不受搜索导航影响，导航离开时保持展开
- *
- * 使用 useEffect 而非渲染期同步派生状态，确保在 React.memo 下可靠工作。
- * 初始值从 searchAutoExpand 派生，避免首次挂载时的闪烁。
- *
- * @param searchAutoExpand - 搜索导航自动展开信号
- * @returns expanded 状态和手动切换回调
- */
-function useCollapsible(searchAutoExpand?: boolean) {
-  /** 展开状态。初始值从 searchAutoExpand 派生：组件首次挂载时若已是搜索目标则直接展开 */
-  const [expanded, setExpanded] = useState(!!searchAutoExpand);
-  /** 标记当前展开是否由搜索导航自动触发（用于区分自动/手动展开） */
-  const wasAutoExpandedRef = useRef(!!searchAutoExpand);
-
-  useEffect(() => {
-    if (searchAutoExpand) {
-      // 搜索导航要求展开
-      setExpanded(true);
-      wasAutoExpandedRef.current = true;
-    } else if (wasAutoExpandedRef.current) {
-      // 搜索导航离开：仅自动展开的消息才自动收起，手动展开的保持不变
-      setExpanded(false);
-      wasAutoExpandedRef.current = false;
-    }
-  }, [searchAutoExpand]);
-
-  /** 手动点击切换：清除自动展开标记，搜索导航离开时不会自动收起 */
-  const handleManualToggle = useCallback(() => {
-    setExpanded(prev => {
-      wasAutoExpandedRef.current = false;
-      return !prev;
-    });
-  }, []);
-
-  return { expanded, handleManualToggle };
-}
 
 /**
  * CompactSummaryBlock - 压缩摘要消息的专用渲染组件
@@ -447,7 +405,7 @@ interface MessageItemProps {
   toolUseMap: Record<string, ToolUseInfo>;
   /** 搜索高亮选项（仅匹配消息传入，非匹配传 undefined） */
   searchHighlight?: SearchHighlight;
-  /** 是否需要自动展开（仅 compact_summary / system 类型有效） */
+  /** 是否需要自动展开（搜索导航跳转到此消息时为 true，所有可折叠内容块均响应） */
   searchAutoExpand: boolean;
   /** 是否处于多选模式 */
   selectionMode: boolean;
@@ -752,6 +710,7 @@ const MessageItem = memo(function MessageItem({
                 projectPath={projectPath}
                 toolUseMap={toolUseMap}
                 searchHighlight={searchHighlight}
+                searchAutoExpand={searchAutoExpand}
               />
             </div>
           )}
@@ -958,16 +917,13 @@ export function ChatView({
    * 搜索导航自动展开的消息 displayId（派生值，非 state）。
    *
    * 从 currentMatchIndex 同步派生，避免额外的 setState 导致二次重渲染。
-   * 当搜索导航跳转到折叠消息（compact_summary / system）时非 null，否则 null。
+   * 当搜索导航跳转到任意消息时返回其 displayId，用于触发该消息内部
+   * 所有可折叠组件（compact_summary、system、thinking、tool_use、tool_result）的自动展开。
    */
   const searchAutoExpandId = useMemo(() => {
     if (currentMatchIndex < 0 || currentMatchIndex >= navSearchMatchIds.length) return null;
-    const targetDisplayId = navSearchMatchIds[currentMatchIndex];
-    const targetMsg = visibleMessages.find(msg => msg.displayId === targetDisplayId);
-    if (!targetMsg) return null;
-    const isCollapsible = targetMsg.displayType === 'compact_summary' || targetMsg.displayType === 'system';
-    return isCollapsible ? targetDisplayId : null;
-  }, [currentMatchIndex, navSearchMatchIds, visibleMessages]);
+    return navSearchMatchIds[currentMatchIndex];
+  }, [currentMatchIndex, navSearchMatchIds]);
 
   /**
    * 渐进式渲染：视口驱动，先渲染可视区域，空闲时向外扩散。
@@ -1166,8 +1122,13 @@ export function ChatView({
     // 1. 确保目标消息已渲染
     forceRenderIndex(targetIdx);
 
-    // 2. 判断是否为折叠类型（用于延迟滚动等待展开动画）
-    const isCollapsible = targetMsg.displayType === 'compact_summary' || targetMsg.displayType === 'system';
+    // 2. 判断是否为消息级折叠类型（compact_summary / system 整体折叠，展开动画较长）
+    // 或内容块级折叠类型（thinking / tool_use / tool_result 内部折叠，展开较快）
+    const isMsgLevelCollapsible = targetMsg.displayType === 'compact_summary' || targetMsg.displayType === 'system';
+    // 内容块级折叠：消息内含有 thinking / tool_use / tool_result 块
+    const hasBlockLevelCollapsible = !isMsgLevelCollapsible && targetMsg.content.some(
+      b => b.type === 'thinking' || b.type === 'tool_use' || b.type === 'tool_result'
+    );
 
     // 3. 滚动 + 闪烁（直接 DOM 操作，不触发 React 重渲染）
     const doScrollAndFlash = () => {
@@ -1202,15 +1163,20 @@ export function ChatView({
       };
     };
 
-    // 折叠消息：延迟 400ms 等展开动画完成再滚动
+    // 消息级折叠：延迟 400ms 等展开动画完成再滚动
     // useCollapsible 的 useEffect 在 DOM 提交后异步运行（比渲染期同步派生晚 ~1 帧），
     // 展开动画 250ms + useEffect 延迟 ~16ms + 余量 ≈ 400ms
+    // 内容块级折叠：延迟 300ms（展开动画 250ms + 余量）
     // 非折叠消息：直接 rAF
     let scrollTimer: ReturnType<typeof setTimeout> | null = null;
-    if (isCollapsible) {
+    if (isMsgLevelCollapsible) {
       scrollTimer = setTimeout(() => {
         requestAnimationFrame(doScrollAndFlash);
       }, 400);
+    } else if (hasBlockLevelCollapsible) {
+      scrollTimer = setTimeout(() => {
+        requestAnimationFrame(doScrollAndFlash);
+      }, 300);
     } else {
       requestAnimationFrame(doScrollAndFlash);
     }

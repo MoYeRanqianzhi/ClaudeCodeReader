@@ -18,6 +18,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Wrench, Code, ChevronDown, ChevronUp } from 'lucide-react';
 import type { MessageContent } from '../types/claude';
 import { formatToolArgs } from '../utils/toolFormatter';
+import { useCollapsible } from '../hooks/useCollapsible';
 
 /** 折叠阈值：diff 内容超过此行数时默认折叠 */
 const COLLAPSE_LINE_THRESHOLD = 5;
@@ -33,6 +34,11 @@ interface ToolUseRendererProps {
   block: MessageContent;
   /** 当前项目的根目录路径，用于路径简化 */
   projectPath: string;
+  /**
+   * 搜索导航自动展开信号。
+   * true 时自动展开 diff 折叠内容，false/undefined 时不干预。
+   */
+  searchAutoExpand?: boolean;
 }
 
 /**
@@ -140,11 +146,15 @@ function DiffLines({ removed, added }: { removed: string[]; added: string[] }) {
  * @param props - 组件属性
  * @returns JSX 元素
  */
-export function ToolUseRenderer({ block, projectPath }: ToolUseRendererProps) {
+export function ToolUseRenderer({ block, projectPath, searchAutoExpand }: ToolUseRendererProps) {
   /** 控制原始 JSON 参数面板的展开/收起状态 */
   const [showRaw, setShowRaw] = useState(false);
-  /** 控制 diff 内容的展开/收起状态 */
-  const [expanded, setExpanded] = useState(false);
+  /**
+   * 控制 diff 内容的展开/收起状态。
+   * 使用 useCollapsible 统一管理：搜索导航时自动展开，离开时自动收起。
+   * 仅在有可折叠 diff 内容时 searchAutoExpand 才有实际效果。
+   */
+  const { expanded, handleManualToggle: toggleExpanded } = useCollapsible(searchAutoExpand);
   /** 组件根元素引用，用于收起时滚动定位 */
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -245,7 +255,7 @@ export function ToolUseRenderer({ block, projectPath }: ToolUseRendererProps) {
           {/* 折叠/展开按钮 */}
           {shouldCollapse && (
             <button
-              onClick={() => setExpanded(!expanded)}
+              onClick={toggleExpanded}
               className="w-full px-2 py-1 text-xs text-primary hover:bg-accent/50 transition-colors flex items-center justify-center gap-1 border-t border-border/50"
             >
               {expanded ? (

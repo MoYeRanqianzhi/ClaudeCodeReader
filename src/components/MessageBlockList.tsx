@@ -36,6 +36,13 @@ interface MessageBlockListProps {
    * undefined 时不传递，React.memo 可跳过重渲染。
    */
   searchHighlight?: SearchHighlight;
+  /**
+   * 搜索导航自动展开信号。
+   * true 时，穿透到每个 MessageContentRenderer 中的可折叠组件
+   * （thinking / tool_use / tool_result），触发自动展开。
+   * false/undefined 时不干预。
+   */
+  searchAutoExpand?: boolean;
 }
 
 /**
@@ -50,7 +57,7 @@ interface MessageBlockListProps {
  * @param props - 包含待渲染的内容块数组和上下文信息
  * @returns 渲染后的 JSX 元素
  */
-export const MessageBlockList = memo(function MessageBlockList({ content, projectPath, toolUseMap, searchHighlight }: MessageBlockListProps) {
+export const MessageBlockList = memo(function MessageBlockList({ content, projectPath, toolUseMap, searchHighlight, searchAutoExpand }: MessageBlockListProps) {
   if (content.length === 0) {
     return (
       <div className="text-xs text-muted-foreground italic">
@@ -68,6 +75,7 @@ export const MessageBlockList = memo(function MessageBlockList({ content, projec
           projectPath={projectPath}
           toolUseMap={toolUseMap}
           searchHighlight={searchHighlight}
+          searchAutoExpand={searchAutoExpand}
         />
       ))}
     </div>

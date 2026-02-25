@@ -22,6 +22,7 @@ import {
 import type { MessageContent, ToolUseInfo, SearchHighlight } from '../types/claude';
 import { formatToolArgs } from '../utils/toolFormatter';
 import { checkFileExists, openInExplorer } from '../utils/claudeData';
+import { useCollapsible } from '../hooks/useCollapsible';
 
 /** 折叠阈值：超过此行数时默认折叠 */
 const COLLAPSE_LINE_THRESHOLD = 5;
@@ -48,6 +49,11 @@ interface ToolResultRendererProps {
    * 支持字面量（大小写敏感/不敏感）和正则表达式三种模式。
    */
   searchHighlight?: SearchHighlight;
+  /**
+   * 搜索导航自动展开信号。
+   * true 时自动展开折叠的工具结果内容，false/undefined 时不干预。
+   */
+  searchAutoExpand?: boolean;
 }
 
 /**
@@ -160,9 +166,13 @@ export function ToolResultRenderer({
   projectPath,
   isError,
   searchHighlight,
+  searchAutoExpand,
 }: ToolResultRendererProps) {
-  /** 内容是否处于展开状态 */
-  const [expanded, setExpanded] = useState(false);
+  /**
+   * 内容展开/收起状态。
+   * 使用 useCollapsible 统一管理：搜索导航时自动展开，离开时自动收起。
+   */
+  const { expanded, handleManualToggle: toggleExpanded } = useCollapsible(searchAutoExpand);
   /** 关联文件是否存在（用于控制"打开文件位置"按钮） */
   const [fileExists, setFileExists] = useState<boolean | null>(null);
   /** 组件根元素引用，用于收起时滚动定位 */
@@ -301,7 +311,7 @@ export function ToolResultRenderer({
       {/* 折叠/展开按钮 */}
       {shouldCollapse && (
         <button
-          onClick={() => setExpanded(!expanded)}
+          onClick={toggleExpanded}
           className="mt-1 text-xs text-primary hover:text-primary/80 transition-colors flex items-center gap-1"
         >
           {expanded ? (

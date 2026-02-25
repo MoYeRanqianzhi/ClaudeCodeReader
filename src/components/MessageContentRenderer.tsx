@@ -6,20 +6,25 @@
  * - text：纯文本 / Markdown 格式的文字内容
  * - tool_use：工具调用块 → 委托给 ToolUseRenderer（紧凑 Tool(args) 格式）
  * - tool_result：工具结果块 → 委托给 ToolResultRenderer（折叠 + 打开文件位置）
- * - thinking：AI 思考过程块（默认折叠，斜体淡色显示）
+ * - thinking：AI 思考过程块（默认折叠，受 useCollapsible 控制）
  * - image：图片内容块（通过 Base64 data URI 渲染）
  *
  * 性能优化：
  * - 使用 React.memo 包裹，props 不变时跳过重渲染
  * - 移除 framer-motion（motion.div），使用纯 CSS 动画，零 JS 开销
+ *
+ * 搜索导航集成：
+ * - searchAutoExpand 信号穿透到所有可折叠子组件（thinking / tool_use / tool_result）
+ * - 搜索跳转时自动展开折叠内容，离开时自动收起（手动展开的不受影响）
  */
 
 import { memo } from 'react';
-import { Lightbulb } from 'lucide-react';
+import { Lightbulb, ChevronRight, ChevronDown } from 'lucide-react';
 import type { MessageContent, ToolUseInfo, SearchHighlight } from '../types/claude';
 import { ToolUseRenderer } from './ToolUseRenderer';
 import { ToolResultRenderer } from './ToolResultRenderer';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { useCollapsible } from '../hooks/useCollapsible';
 
 /**
  * MessageContentRenderer 组件的属性接口
@@ -37,6 +42,51 @@ interface MessageContentRendererProps {
    * 支持字面量（大小写敏感/不敏感）和正则表达式模式。
    */
   searchHighlight?: SearchHighlight;
+  /**
+   * 搜索导航自动展开信号。
+   * true 时触发可折叠内容块（thinking / tool_use / tool_result）自动展开。
+   * false/undefined 时不干预。
+   */
+  searchAutoExpand?: boolean;
+}
+
+/**
+ * ThinkingBlock - 思考过程块的受控折叠组件
+ *
+ * 替代原来的 HTML <details> 标签，使用 useCollapsible 实现受控展开/收起，
+ * 支持搜索导航自动展开。
+ *
+ * @param content - 思考过程的文本内容
+ * @param searchHighlight - 搜索高亮选项
+ * @param searchAutoExpand - 搜索导航自动展开信号
+ */
+function ThinkingBlock({ content, searchHighlight, searchAutoExpand }: {
+  content: string;
+  searchHighlight?: SearchHighlight;
+  searchAutoExpand?: boolean;
+}) {
+  const { expanded, handleManualToggle } = useCollapsible(searchAutoExpand);
+
+  return (
+    <div className="thinking-block content-block animate-scale-in">
+      <button
+        onClick={handleManualToggle}
+        className="cursor-pointer select-none text-sm flex items-center gap-1 w-full text-left"
+      >
+        {expanded ? (
+          <ChevronDown className="w-4 h-4 shrink-0" />
+        ) : (
+          <ChevronRight className="w-4 h-4 shrink-0" />
+        )}
+        <Lightbulb className="w-4 h-4 inline-block shrink-0" /> 思考过程
+      </button>
+      {expanded && (
+        <div className="mt-2 italic opacity-70">
+          <MarkdownRenderer content={content} searchHighlight={searchHighlight} />
+        </div>
+      )}
+    </div>
+  );
 }
 
 /**
@@ -46,7 +96,7 @@ interface MessageContentRendererProps {
  * - text: Markdown 渲染（通过 MarkdownRenderer）
  * - tool_use: 委托给 ToolUseRenderer（紧凑显示 + Raw 切换）
  * - tool_result: 委托给 ToolResultRenderer（折叠 + 打开文件位置）
- * - thinking: 默认折叠 + 斜体淡色
+ * - thinking: 受控折叠 + 斜体淡色（通过 ThinkingBlock + useCollapsible）
  * - image: 内联图片展示
  *
  * 所有入场动画使用 CSS @keyframes（animate-msg-in / animate-scale-in），
@@ -55,7 +105,7 @@ interface MessageContentRendererProps {
  * @param props - 包含待渲染的内容块对象
  * @returns 渲染后的 JSX 元素
  */
-export const MessageContentRenderer = memo(function MessageContentRenderer({ block, projectPath, toolUseMap, searchHighlight }: MessageContentRendererProps) {
+export const MessageContentRenderer = memo(function MessageContentRenderer({ block, projectPath, toolUseMap, searchHighlight, searchAutoExpand }: MessageContentRendererProps) {
   switch (block.type) {
     /* ====== 文本内容块（Markdown 渲染） ====== */
     case 'text':
@@ -71,6 +121,7 @@ export const MessageContentRenderer = memo(function MessageContentRenderer({ blo
         <ToolUseRenderer
           block={block}
           projectPath={projectPath}
+          searchAutoExpand={searchAutoExpand}
         />
       );
 
@@ -83,20 +134,18 @@ export const MessageContentRenderer = memo(function MessageContentRenderer({ blo
           projectPath={projectPath}
           isError={block.is_error}
           searchHighlight={searchHighlight}
+          searchAutoExpand={searchAutoExpand}
         />
       );
 
-    /* ====== 思考过程块 ====== */
+    /* ====== 思考过程块（受控折叠，支持搜索导航自动展开） ====== */
     case 'thinking':
       return (
-        <details className="thinking-block content-block animate-scale-in">
-          <summary className="cursor-pointer select-none text-sm">
-            <Lightbulb className="w-4 h-4 inline-block shrink-0" /> 思考过程
-          </summary>
-          <div className="mt-2 italic opacity-70">
-            <MarkdownRenderer content={block.thinking || block.text || ''} searchHighlight={searchHighlight} />
-          </div>
-        </details>
+        <ThinkingBlock
+          content={block.thinking || block.text || ''}
+          searchHighlight={searchHighlight}
+          searchAutoExpand={searchAutoExpand}
+        />
       );
 
     /* ====== 图片内容块 ====== */
