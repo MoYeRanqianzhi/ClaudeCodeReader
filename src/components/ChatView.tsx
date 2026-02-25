@@ -22,7 +22,7 @@ import {
   Copy, Edit2, Trash2, Bot, User, Lightbulb, Wrench, Archive, Terminal, ExternalLink, Search
 } from 'lucide-react';
 import type { Session, Project, DisplayMessage, TransformedSession, ToolUseInfo, SearchHighlight } from '../types/claude';
-import { formatTimestamp, searchSession } from '../utils/claudeData';
+import { formatTimestamp, searchSession, openResumeTerminal } from '../utils/claudeData';
 import { parseJsonlPath } from '../utils/messageTransform';
 import { MessageBlockList } from './MessageBlockList';
 import { MessageContentRenderer } from './MessageContentRenderer';
@@ -804,6 +804,8 @@ export function ChatView({
   const [showFilterDropdown, setShowFilterDropdown] = useState(false);
   /** 控制导出下拉菜单的显示/隐藏状态 */
   const [showExportDropdown, setShowExportDropdown] = useState(false);
+  /** 控制实用工具下拉菜单的显示/隐藏状态 */
+  const [showToolsDropdown, setShowToolsDropdown] = useState(false);
 
   // ==================== VSCode 风格导航搜索状态 ====================
   /** 导航搜索栏是否打开 */
@@ -842,6 +844,8 @@ export function ChatView({
   const filterRef = useRef<HTMLDivElement>(null);
   /** 导出下拉菜单容器引用，用于检测外部点击以关闭下拉菜单 */
   const exportRef = useRef<HTMLDivElement>(null);
+  /** 实用工具下拉菜单容器引用，用于检测外部点击以关闭下拉菜单 */
+  const toolsRef = useRef<HTMLDivElement>(null);
   /** 消息列表滚动容器引用 */
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
@@ -855,6 +859,9 @@ export function ChatView({
       }
       if (exportRef.current && !exportRef.current.contains(event.target as Node)) {
         setShowExportDropdown(false);
+      }
+      if (toolsRef.current && !toolsRef.current.contains(event.target as Node)) {
+        setShowToolsDropdown(false);
       }
     };
 
@@ -1380,6 +1387,48 @@ export function ChatView({
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
+          {/* 实用工具下拉菜单 */}
+          <div className="relative" ref={toolsRef}>
+            <motion.button
+              onClick={() => setShowToolsDropdown(!showToolsDropdown)}
+              className={`p-2 rounded-lg transition-colors ${
+                showToolsDropdown ? 'bg-primary text-primary-foreground' : 'hover:bg-accent'
+              }`}
+              title="实用工具"
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+            >
+              <Wrench className="w-5 h-5" />
+            </motion.button>
+            <AnimatePresence>
+              {showToolsDropdown && (
+                <motion.div
+                  initial={{ opacity: 0, y: -8, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: -8, scale: 0.95 }}
+                  transition={{ duration: 0.15 }}
+                  className="absolute right-0 top-full mt-1 w-44 bg-popover border border-border rounded-lg shadow-lg z-50 overflow-hidden"
+                >
+                  <button
+                    onClick={async () => {
+                      setShowToolsDropdown(false);
+                      if (!session || !projectPath) return;
+                      try {
+                        await openResumeTerminal(projectPath, session.id);
+                      } catch (err) {
+                        console.error('一键 Resume 失败:', err);
+                      }
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent/50 transition-colors"
+                  >
+                    <Terminal className="w-4 h-4" />
+                    <span>一键 Resume</span>
+                  </button>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+
           {/* 搜索按钮：点击打开 VSCode 风格导航搜索栏 */}
           <motion.button
             onClick={() => {

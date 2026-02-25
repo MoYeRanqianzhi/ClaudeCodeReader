@@ -83,6 +83,10 @@ pub fn run() {
             commands::messages::export_session,
             // 文件系统辅助 commands
             commands::settings::check_file_exists,
+            // 实用工具 commands
+            commands::tools::read_resume_config,
+            commands::tools::save_resume_config,
+            commands::tools::open_resume_terminal,
         ])
         // `setup` 闭包：在应用窗口创建之前执行的初始化钩子
         .setup(|app| {

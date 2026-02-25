@@ -41,11 +41,12 @@
  *           └── agent-<id>.jsonl     - 子 agent 会话文件（被过滤）
  *
  * ~/.mo/CCR/
- *   └── env-profiles.json       - 环境配置管理（CCR 独有）
+ *   ├── env-profiles.json       - 环境配置管理（CCR 独有）
+ *   └── resume-config.json      - 一键 Resume 参数配置（CCR 独有）
  */
 
 import { invoke } from '@tauri-apps/api/core';
-import type { ClaudeSettings, Project, SessionMessage, HistoryEntry, EnvSwitcherConfig, EnvProfile, TransformedSession } from '../types/claude';
+import type { ClaudeSettings, Project, SessionMessage, HistoryEntry, EnvSwitcherConfig, EnvProfile, TransformedSession, ResumeConfig } from '../types/claude';
 
 // ============ 路径工具函数 ============
 
@@ -436,6 +437,44 @@ export async function deleteSession(sessionFilePath: string): Promise<void> {
  */
 export async function checkFileExists(filePath: string): Promise<boolean> {
   return invoke<boolean>('check_file_exists', { filePath });
+}
+
+// ============ 实用工具函数 ============
+
+/**
+ * 读取一键 Resume 配置
+ *
+ * 从 `~/.mo/CCR/resume-config.json` 加载用户配置的 Resume 参数。
+ * 配置文件不存在时返回默认空配置（空 flags + 空 customArgs）。
+ *
+ * @returns ResumeConfig 对象
+ */
+export async function readResumeConfig(): Promise<ResumeConfig> {
+  return invoke<ResumeConfig>('read_resume_config');
+}
+
+/**
+ * 保存一键 Resume 配置
+ *
+ * 将 ResumeConfig 序列化为 JSON 并写入 `~/.mo/CCR/resume-config.json`。
+ *
+ * @param config - 要保存的 ResumeConfig 对象
+ */
+export async function saveResumeConfig(config: ResumeConfig): Promise<void> {
+  return invoke<void>('save_resume_config', { config });
+}
+
+/**
+ * 打开系统终端执行 claude --resume 命令
+ *
+ * 在 Rust 后端通过 `std::process::Command` 打开系统终端，
+ * 自动 cd 到项目目录并执行 `claude --resume <sessionId> <flags> <customArgs>`。
+ *
+ * @param projectPath - 项目的真实文件系统路径（已解码）
+ * @param sessionId - 会话 UUID
+ */
+export async function openResumeTerminal(projectPath: string, sessionId: string): Promise<void> {
+  return invoke<void>('open_resume_terminal', { projectPath, sessionId });
 }
 
 /**

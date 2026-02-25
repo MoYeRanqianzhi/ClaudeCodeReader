@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Palette, Bot, Shield, Info, Eye, EyeOff, Plus, Trash2, Github, Sun, SunMoon, Moon } from 'lucide-react';
-import type { ClaudeSettings, EnvProfile } from '../types/claude';
+import { X, Palette, Bot, Shield, Info, Eye, EyeOff, Plus, Trash2, Github, Sun, SunMoon, Moon, Wrench, CheckSquare, Square } from 'lucide-react';
+import type { ClaudeSettings, EnvProfile, ResumeConfig } from '../types/claude';
+import { readResumeConfig, saveResumeConfig } from '../utils/claudeData';
 
 /**
  * 设置面板组件的属性接口
@@ -40,13 +41,26 @@ export function SettingsPanel({
   /** 编辑中的设置副本，避免直接修改外部传入的 settings */
   const [editedSettings, setEditedSettings] = useState<ClaudeSettings>(settings);
   // 如果正在编辑配置，自动切换到环境变量标签页
-  const [activeTab, setActiveTab] = useState<'general' | 'env' | 'permissions' | 'about'>(
+  const [activeTab, setActiveTab] = useState<'general' | 'env' | 'tools' | 'permissions' | 'about'>(
     editingProfile ? 'env' : 'general'
   );
   /** 标记用户是否修改了设置，用于控制保存按钮的可用状态 */
   const [hasChanges, setHasChanges] = useState(false);
   /** 控制 API 密钥等敏感环境变量值的可见性 */
   const [showApiKey, setShowApiKey] = useState(false);
+  /** 一键 Resume 配置（独立于 Claude Code settings，存储在 CCR 配置目录） */
+  const [resumeConfig, setResumeConfig] = useState<ResumeConfig>({ flags: [], customArgs: '' });
+
+  /**
+   * 可勾选的常用 Claude CLI flag 列表
+   * 每项包含 flag 字符串和中文说明
+   */
+  const RESUME_FLAGS = [
+    { flag: '--dangerously-skip-permissions', label: '跳过所有权限检查（仅限沙箱环境）' },
+    { flag: '--verbose', label: '启用详细输出模式' },
+    { flag: '--debug', label: '启用调试模式' },
+    { flag: '--no-chrome', label: '禁用 Chrome 集成' },
+  ];
 
   /**
    * 主题三模式选项配置
@@ -62,6 +76,13 @@ export function SettingsPanel({
   useEffect(() => {
     setEditedSettings(settings);
   }, [settings]);
+
+  /** 组件挂载时加载 Resume 配置 */
+  useEffect(() => {
+    readResumeConfig()
+      .then(setResumeConfig)
+      .catch((err) => console.error('加载 Resume 配置失败:', err));
+  }, []);
 
   /**
    * 更新指定环境变量的值
@@ -122,6 +143,7 @@ export function SettingsPanel({
   const tabs = [
     { id: 'general', label: '常规', icon: Palette },
     { id: 'env', label: '环境变量', icon: Bot },
+    { id: 'tools', label: '工具', icon: Wrench },
     { id: 'permissions', label: '权限', icon: Shield },
     { id: 'about', label: '关于', icon: Info },
   ] as const;
@@ -350,6 +372,81 @@ export function SettingsPanel({
                     ))}
                   </div>
                 )}
+              </motion.div>
+            )}
+
+            {/* 工具标签页：一键 Resume 参数配置 */}
+            {activeTab === 'tools' && (
+              <motion.div
+                key="tools"
+                className="space-y-6"
+                initial={{ opacity: 0, x: -20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: 20 }}
+              >
+                {/* 一键 Resume 配置区域 */}
+                <div>
+                  <label className="block text-sm font-medium text-foreground mb-1">一键 Resume 参数</label>
+                  <p className="text-xs text-muted-foreground mb-3">
+                    配置通过"实用工具 → 一键 Resume"唤起 Claude CLI 时附加的参数
+                  </p>
+
+                  {/* 常用 Flag 勾选列表 */}
+                  <div className="space-y-2 mb-4">
+                    {RESUME_FLAGS.map(({ flag, label }) => {
+                      const isChecked = resumeConfig.flags.includes(flag);
+                      return (
+                        <button
+                          key={flag}
+                          onClick={() => {
+                            const newFlags = isChecked
+                              ? resumeConfig.flags.filter(f => f !== flag)
+                              : [...resumeConfig.flags, flag];
+                            const newConfig = { ...resumeConfig, flags: newFlags };
+                            setResumeConfig(newConfig);
+                            saveResumeConfig(newConfig).catch(err =>
+                              console.error('保存 Resume 配置失败:', err)
+                            );
+                          }}
+                          className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-accent/50 transition-colors text-left"
+                        >
+                          {isChecked ? (
+                            <CheckSquare className="w-4 h-4 text-primary shrink-0" />
+                          ) : (
+                            <Square className="w-4 h-4 text-muted-foreground shrink-0" />
+                          )}
+                          <div className="min-w-0">
+                            <span className="text-sm font-mono text-foreground">{flag}</span>
+                            <p className="text-xs text-muted-foreground">{label}</p>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* 自定义参数输入框 */}
+                  <div>
+                    <label className="block text-xs font-medium text-muted-foreground mb-1">自定义参数</label>
+                    <input
+                      type="text"
+                      value={resumeConfig.customArgs}
+                      onChange={(e) => {
+                        const newConfig = { ...resumeConfig, customArgs: e.target.value };
+                        setResumeConfig(newConfig);
+                      }}
+                      onBlur={() => {
+                        saveResumeConfig(resumeConfig).catch(err =>
+                          console.error('保存 Resume 配置失败:', err)
+                        );
+                      }}
+                      placeholder="额外参数（追加在命令末尾），如 --model opus"
+                      className="w-full px-3 py-2 rounded-lg bg-muted text-foreground border border-border focus:outline-none focus:ring-2 focus:ring-ring text-sm font-mono"
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">
+                      最终命令：claude --resume &lt;会话ID&gt; {resumeConfig.flags.join(' ')} {resumeConfig.customArgs}
+                    </p>
+                  </div>
+                </div>
               </motion.div>
             )}
 

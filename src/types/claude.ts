@@ -565,3 +565,18 @@ export interface SearchHighlight {
    */
   useRegex: boolean;
 }
+
+/**
+ * 一键 Resume 功能配置接口
+ *
+ * 存储用户在设置面板中配置的 Claude CLI resume 参数。
+ * 配置文件路径：`~/.mo/CCR/resume-config.json`
+ *
+ * 对应 Rust 后端 `commands::tools::ResumeConfig` 结构体。
+ */
+export interface ResumeConfig {
+  /** 勾选的 CLI flag 列表，如 ["--dangerously-skip-permissions", "--verbose"] */
+  flags: string[];
+  /** 用户自定义的额外参数字符串（追加在命令末尾） */
+  customArgs: string;
+}
