@@ -13,7 +13,7 @@
  * - 路径参数自动简化为相对路径（如果在项目目录内）
  */
 
-import { useState, useMemo, useRef } from 'react';
+import { useState, useMemo, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Wrench, Code, ChevronDown, ChevronUp } from 'lucide-react';
 import type { MessageContent, SearchHighlight } from '../types/claude';
@@ -163,6 +163,8 @@ export function ToolUseRenderer({ block, projectPath, searchAutoExpand, searchHi
   const { expanded, handleManualToggle: toggleExpanded } = useCollapsible(searchAutoExpand);
   /** 组件根元素引用，用于收起时滚动定位 */
   const containerRef = useRef<HTMLDivElement>(null);
+  /** 标记 Raw 面板是否由搜索导航自动展开（用于区分自动/手动展开） */
+  const wasRawAutoExpandedRef = useRef(false);
 
   const toolName = block.name || '未知工具';
   const input = (block.input || {}) as Record<string, unknown>;
@@ -173,6 +175,24 @@ export function ToolUseRenderer({ block, projectPath, searchAutoExpand, searchHi
     () => extractDiffData(toolName, input),
     [toolName, input]
   );
+
+  /**
+   * 搜索导航自动展开 Raw 面板（仅对无 diff 内容的工具生效）。
+   *
+   * 对于 AskUserQuestion、WebSearch 等非 Write/Edit 工具，
+   * 紧凑格式只显示 "Tool(...)"，实际内容藏在 Raw JSON 面板中。
+   * 搜索导航跳转到这些工具时，自动展开 Raw 面板使匹配内容可见。
+   * 导航离开时自动收起（手动展开的不受影响）。
+   */
+  useEffect(() => {
+    if (searchAutoExpand && !diffData) {
+      setShowRaw(true);
+      wasRawAutoExpandedRef.current = true;
+    } else if (!searchAutoExpand && wasRawAutoExpandedRef.current) {
+      setShowRaw(false);
+      wasRawAutoExpandedRef.current = false;
+    }
+  }, [searchAutoExpand, diffData]);
 
   const shouldCollapse = diffData !== null && diffData.totalLines > COLLAPSE_LINE_THRESHOLD;
 
@@ -280,7 +300,7 @@ export function ToolUseRenderer({ block, projectPath, searchAutoExpand, searchHi
         </div>
       )}
 
-      {/* 原始 JSON 参数面板（展开/收起都有动画） */}
+      {/* 原始 JSON 参数面板（展开/收起都有动画，支持搜索高亮） */}
       <AnimatePresence initial={false}>
         {showRaw && (
           <motion.div
@@ -292,7 +312,10 @@ export function ToolUseRenderer({ block, projectPath, searchAutoExpand, searchHi
             style={{ overflow: 'hidden' }}
           >
             <pre className="code-block mt-2 text-xs overflow-x-auto custom-scrollbar">
-              {JSON.stringify(input, null, 2)}
+              {searchHighlight
+                ? <HighlightedText text={JSON.stringify(input, null, 2)} highlight={searchHighlight} />
+                : JSON.stringify(input, null, 2)
+              }
             </pre>
           </motion.div>
         )}

@@ -10,7 +10,12 @@
  * - Glob/Grep：显示搜索模式和路径
  * - Task：显示任务描述
  * - LSP：显示操作类型和文件位置
- * - 其他工具：通用降级格式
+ * - AskUserQuestion：显示问题内容
+ * - WebSearch：显示搜索查询
+ * - WebFetch：显示 URL
+ * - NotebookEdit：显示笔记本路径
+ * - TodoWrite：显示待办项数量
+ * - 其他工具：尝试提取第一个字符串参数，无则显示 "..."
  */
 
 import { toRelativePath } from './messageTransform';
@@ -19,6 +24,8 @@ import { toRelativePath } from './messageTransform';
 const BASH_COMMAND_MAX_LENGTH = 80;
 /** Task 描述显示的最大字符数 */
 const TASK_DESC_MAX_LENGTH = 60;
+/** 通用文本参数显示的最大字符数 */
+const GENERIC_TEXT_MAX_LENGTH = 80;
 
 /**
  * 截断过长文本并添加省略号
@@ -137,11 +144,59 @@ export function formatToolArgs(
       };
     }
 
-    // ====== 其他工具：通用降级 ======
-    default:
+    // ====== 其他常见 Claude Code 工具 ======
+
+    case 'AskUserQuestion': {
+      const question = (input.question as string) || '';
       return {
-        args: '...',
+        args: truncate(question, GENERIC_TEXT_MAX_LENGTH),
         filePath: null,
       };
+    }
+
+    case 'WebSearch': {
+      const query = (input.query as string) || '';
+      return {
+        args: truncate(query, GENERIC_TEXT_MAX_LENGTH),
+        filePath: null,
+      };
+    }
+
+    case 'WebFetch': {
+      const url = (input.url as string) || '';
+      return {
+        args: truncate(url, GENERIC_TEXT_MAX_LENGTH),
+        filePath: null,
+      };
+    }
+
+    case 'NotebookEdit': {
+      const notebookPath = (input.notebook_path as string) || '';
+      return {
+        args: toRelativePath(notebookPath, projectPath),
+        filePath: notebookPath || null,
+      };
+    }
+
+    case 'TodoWrite': {
+      const todos = input.todos;
+      const count = Array.isArray(todos) ? todos.length : 0;
+      return {
+        args: `${count} 项`,
+        filePath: null,
+      };
+    }
+
+    // ====== 其他工具：通用降级（尝试提取第一个字符串参数） ======
+    default: {
+      // 尝试从 input 中找到第一个有意义的字符串值作为摘要
+      const firstStringValue = Object.values(input).find(
+        (v): v is string => typeof v === 'string' && v.length > 0
+      );
+      return {
+        args: firstStringValue ? truncate(firstStringValue, GENERIC_TEXT_MAX_LENGTH) : '...',
+        filePath: null,
+      };
+    }
   }
 }
