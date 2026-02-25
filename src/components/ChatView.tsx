@@ -87,6 +87,49 @@ interface ChatViewProps {
 const COMPACT_EXPAND_TRANSITION = { duration: 0.25, ease: 'easeInOut' as const };
 
 /**
+ * useCollapsible - 统一的折叠/展开 Hook
+ *
+ * 为所有可折叠消息组件（compact_summary、system 等）提供标准化的折叠逻辑。
+ * 支持两种展开方式：
+ * - 搜索导航自动展开：`searchAutoExpand` 为 true 时展开，变回 false 时自动收起
+ * - 手动点击展开：不受搜索导航影响，导航离开时保持展开
+ *
+ * 使用 useEffect 而非渲染期同步派生状态，确保在 React.memo 下可靠工作。
+ * 初始值从 searchAutoExpand 派生，避免首次挂载时的闪烁。
+ *
+ * @param searchAutoExpand - 搜索导航自动展开信号
+ * @returns expanded 状态和手动切换回调
+ */
+function useCollapsible(searchAutoExpand?: boolean) {
+  /** 展开状态。初始值从 searchAutoExpand 派生：组件首次挂载时若已是搜索目标则直接展开 */
+  const [expanded, setExpanded] = useState(!!searchAutoExpand);
+  /** 标记当前展开是否由搜索导航自动触发（用于区分自动/手动展开） */
+  const wasAutoExpandedRef = useRef(!!searchAutoExpand);
+
+  useEffect(() => {
+    if (searchAutoExpand) {
+      // 搜索导航要求展开
+      setExpanded(true);
+      wasAutoExpandedRef.current = true;
+    } else if (wasAutoExpandedRef.current) {
+      // 搜索导航离开：仅自动展开的消息才自动收起，手动展开的保持不变
+      setExpanded(false);
+      wasAutoExpandedRef.current = false;
+    }
+  }, [searchAutoExpand]);
+
+  /** 手动点击切换：清除自动展开标记，搜索导航离开时不会自动收起 */
+  const handleManualToggle = useCallback(() => {
+    setExpanded(prev => {
+      wasAutoExpandedRef.current = false;
+      return !prev;
+    });
+  }, []);
+
+  return { expanded, handleManualToggle };
+}
+
+/**
  * CompactSummaryBlock - 压缩摘要消息的专用渲染组件
  *
  * 以分割线 + 默认折叠的形式展示自动压缩生成的上下文续接消息。
@@ -108,43 +151,7 @@ function CompactSummaryBlock({
   /** 搜索导航自动展开信号：true 时自动展开，false 时自动收起（仅限自动展开的情况） */
   searchAutoExpand?: boolean;
 }) {
-  const [expanded, setExpanded] = useState(false);
-  /**
-   * 标记当前展开是否由搜索导航自动触发。
-   * 用于区分自动展开和手动展开：
-   * - 自动展开：导航离开时自动收起
-   * - 手动展开：导航离开时保持展开
-   */
-  const wasAutoExpandedRef = useRef(false);
-  /** 上一次 searchAutoExpand 的值，用于检测变化 */
-  const prevSearchAutoExpandRef = useRef(false);
-
-  // 渲染期间同步派生状态（React 推荐模式，比 useEffect 更可靠）
-  // 在 render 阶段检测 prop 变化并立即更新 state，避免 useEffect 的异步时序问题
-  if ((searchAutoExpand ?? false) !== prevSearchAutoExpandRef.current) {
-    prevSearchAutoExpandRef.current = searchAutoExpand ?? false;
-    if (searchAutoExpand) {
-      if (!expanded) {
-        setExpanded(true);
-        wasAutoExpandedRef.current = true;
-      }
-    } else {
-      if (wasAutoExpandedRef.current) {
-        setExpanded(false);
-        wasAutoExpandedRef.current = false;
-      }
-    }
-  }
-
-  /** 手动点击切换：标记为非自动展开，搜索导航离开时不会自动收起 */
-  const handleManualToggle = useCallback(() => {
-    setExpanded(prev => {
-      const next = !prev;
-      // 手动操作后清除自动展开标记
-      wasAutoExpandedRef.current = false;
-      return next;
-    });
-  }, []);
+  const { expanded, handleManualToggle } = useCollapsible(searchAutoExpand);
 
   return (
     <motion.div
@@ -232,34 +239,7 @@ function SystemMessageBlock({
   /** 搜索导航自动展开信号 */
   searchAutoExpand?: boolean;
 }) {
-  const [expanded, setExpanded] = useState(false);
-  /** 标记当前展开是否由搜索导航自动触发 */
-  const wasAutoExpandedRef = useRef(false);
-  const prevSearchAutoExpandRef = useRef(false);
-
-  // 渲染期间同步派生状态
-  if ((searchAutoExpand ?? false) !== prevSearchAutoExpandRef.current) {
-    prevSearchAutoExpandRef.current = searchAutoExpand ?? false;
-    if (searchAutoExpand) {
-      if (!expanded) {
-        setExpanded(true);
-        wasAutoExpandedRef.current = true;
-      }
-    } else {
-      if (wasAutoExpandedRef.current) {
-        setExpanded(false);
-        wasAutoExpandedRef.current = false;
-      }
-    }
-  }
-
-  /** 手动点击切换 */
-  const handleManualToggle = useCallback(() => {
-    setExpanded(prev => {
-      wasAutoExpandedRef.current = false;
-      return !prev;
-    });
-  }, []);
+  const { expanded, handleManualToggle } = useCollapsible(searchAutoExpand);
 
   const label = msg.systemLabel || '系统';
   const isPlan = label === '计划';
@@ -1222,13 +1202,15 @@ export function ChatView({
       };
     };
 
-    // 折叠消息：延迟 300ms 等展开动画完成再滚动
+    // 折叠消息：延迟 400ms 等展开动画完成再滚动
+    // useCollapsible 的 useEffect 在 DOM 提交后异步运行（比渲染期同步派生晚 ~1 帧），
+    // 展开动画 250ms + useEffect 延迟 ~16ms + 余量 ≈ 400ms
     // 非折叠消息：直接 rAF
     let scrollTimer: ReturnType<typeof setTimeout> | null = null;
     if (isCollapsible) {
       scrollTimer = setTimeout(() => {
         requestAnimationFrame(doScrollAndFlash);
-      }, 300);
+      }, 400);
     } else {
       requestAnimationFrame(doScrollAndFlash);
     }
@@ -1245,18 +1227,32 @@ export function ChatView({
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
         e.preventDefault();
-        // 切换搜索栏：已打开则关闭，未打开则打开并聚焦
+        // 切换搜索栏：已打开则关闭，未打开则打开
         if (navSearchOpen) {
           closeNavSearch();
         } else {
           setNavSearchOpen(true);
-          navSearchBarRef.current?.focus();
+          // 聚焦由下方 navSearchOpen effect 处理（此时 DOM 尚未更新，ref 为 null）
         }
       }
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [navSearchOpen, closeNavSearch]);
+
+  /**
+   * 搜索栏打开后自动聚焦。
+   *
+   * 不能在 setNavSearchOpen(true) 的同一事件处理中调用 focus()，
+   * 因为 NavSearchBar 是条件渲染的（navSearchOpen && <NavSearchBar>），
+   * setState 后 DOM 尚未更新，ref 仍为 null。
+   * useEffect 在 DOM 提交后运行，此时 NavSearchBar 已挂载，ref 可用。
+   */
+  useEffect(() => {
+    if (navSearchOpen) {
+      navSearchBarRef.current?.focus();
+    }
+  }, [navSearchOpen]);
 
   /**
    * 开始编辑指定的显示消息。
@@ -1417,7 +1413,7 @@ export function ChatView({
           <motion.button
             onClick={() => {
               setNavSearchOpen(true);
-              navSearchBarRef.current?.focus();
+              // 聚焦由 navSearchOpen effect 处理
             }}
             className={`p-2 rounded-lg transition-colors ${
               navSearchOpen ? 'bg-primary text-primary-foreground' : 'hover:bg-accent'
