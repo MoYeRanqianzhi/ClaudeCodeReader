@@ -1135,9 +1135,14 @@ export function ChatView({
       const wrapper = scrollContainerRef.current?.querySelector(`[data-msg-index="${targetIdx}"]`);
       if (!wrapper) return;
 
-      // 瞬间定位到目标消息（不使用 smooth，避免滚动期间闪烁动画已经开始播放）
+      // 优先定位到消息内部的搜索高亮标记（展开后匹配文本可能在折叠内容深处）。
+      // 如果没有高亮标记（例如匹配在 Markdown 渲染前的原始文本中），回退到消息 wrapper。
+      const highlightMark = wrapper.querySelector('mark.search-highlight') as HTMLElement | null;
+      const scrollTarget = highlightMark ?? wrapper as HTMLElement;
+
+      // 瞬间定位到目标（不使用 smooth，避免滚动期间闪烁动画已经开始播放）
       // 搜索导航应该是即时跳转，与 VS Code Ctrl+F 行为一致
-      wrapper.scrollIntoView({ behavior: 'instant', block: 'center' });
+      scrollTarget.scrollIntoView({ behavior: 'instant', block: 'center' });
 
       // 查找闪烁目标元素：优先找内部带 data-flash-target 的元素，否则用 wrapper 自身
       const flashTarget = wrapper.querySelector('[data-flash-target]') as HTMLElement | null ?? wrapper as HTMLElement;
