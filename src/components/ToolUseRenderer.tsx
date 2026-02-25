@@ -16,9 +16,10 @@
 import { useState, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Wrench, Code, ChevronDown, ChevronUp } from 'lucide-react';
-import type { MessageContent } from '../types/claude';
+import type { MessageContent, SearchHighlight } from '../types/claude';
 import { formatToolArgs } from '../utils/toolFormatter';
 import { useCollapsible } from '../hooks/useCollapsible';
+import { HighlightedText } from './HighlightedText';
 
 /** 折叠阈值：diff 内容超过此行数时默认折叠 */
 const COLLAPSE_LINE_THRESHOLD = 5;
@@ -39,6 +40,11 @@ interface ToolUseRendererProps {
    * true 时自动展开 diff 折叠内容，false/undefined 时不干预。
    */
   searchAutoExpand?: boolean;
+  /**
+   * 搜索高亮选项。
+   * 非空时，工具名称、参数和 diff 内容中匹配的片段将被高亮。
+   */
+  searchHighlight?: SearchHighlight;
 }
 
 /**
@@ -105,9 +111,9 @@ function truncateDiff(
 }
 
 /**
- * 渲染 diff 行列表（红色删除行 + 绿色新增行）
+ * 渲染 diff 行列表（红色删除行 + 绿色新增行），支持搜索高亮
  */
-function DiffLines({ removed, added }: { removed: string[]; added: string[] }) {
+function DiffLines({ removed, added, searchHighlight }: { removed: string[]; added: string[]; searchHighlight?: SearchHighlight }) {
   return (
     <>
       {removed.map((line, i) => (
@@ -116,7 +122,7 @@ function DiffLines({ removed, added }: { removed: string[]; added: string[] }) {
           className="px-2 py-px bg-red-500/10 text-red-700 dark:text-red-400 whitespace-pre-wrap break-all"
         >
           <span className="select-none opacity-50 mr-1">-</span>
-          {line}
+          {searchHighlight ? <HighlightedText text={line} highlight={searchHighlight} /> : line}
         </div>
       ))}
       {added.map((line, i) => (
@@ -125,7 +131,7 @@ function DiffLines({ removed, added }: { removed: string[]; added: string[] }) {
           className="px-2 py-px bg-green-500/10 text-green-700 dark:text-green-400 whitespace-pre-wrap break-all"
         >
           <span className="select-none opacity-50 mr-1">+</span>
-          {line}
+          {searchHighlight ? <HighlightedText text={line} highlight={searchHighlight} /> : line}
         </div>
       ))}
     </>
@@ -146,7 +152,7 @@ function DiffLines({ removed, added }: { removed: string[]; added: string[] }) {
  * @param props - 组件属性
  * @returns JSX 元素
  */
-export function ToolUseRenderer({ block, projectPath, searchAutoExpand }: ToolUseRendererProps) {
+export function ToolUseRenderer({ block, projectPath, searchAutoExpand, searchHighlight }: ToolUseRendererProps) {
   /** 控制原始 JSON 参数面板的展开/收起状态 */
   const [showRaw, setShowRaw] = useState(false);
   /**
@@ -204,9 +210,9 @@ export function ToolUseRenderer({ block, projectPath, searchAutoExpand }: ToolUs
       <div className="flex items-center gap-1.5 text-sm">
         <Wrench className="w-4 h-4 shrink-0 text-blue-500" />
         <span>
-          <span className="font-bold">{toolName}</span>
+          <span className="font-bold">{searchHighlight ? <HighlightedText text={toolName} highlight={searchHighlight} /> : toolName}</span>
           <span className="font-bold">(</span>
-          <span className="text-muted-foreground">{args}</span>
+          <span className="text-muted-foreground">{searchHighlight ? <HighlightedText text={args} highlight={searchHighlight} /> : args}</span>
           <span className="font-bold">)</span>
         </span>
         {/* 工具调用 ID 简短显示 */}
@@ -234,7 +240,7 @@ export function ToolUseRenderer({ block, projectPath, searchAutoExpand }: ToolUs
       {collapsedDiff && (
         <div className="mt-2 rounded-md border border-border/50 overflow-hidden text-xs font-mono">
           {/* 始终可见的折叠行 */}
-          <DiffLines removed={collapsedDiff.removed} added={collapsedDiff.added} />
+          <DiffLines removed={collapsedDiff.removed} added={collapsedDiff.added} searchHighlight={searchHighlight} />
 
           {/* 额外行：展开时以动画滑入，收起时以动画滑出 */}
           <AnimatePresence initial={false} onExitComplete={handleCollapseComplete}>
@@ -247,7 +253,7 @@ export function ToolUseRenderer({ block, projectPath, searchAutoExpand }: ToolUs
                 transition={EXPAND_TRANSITION}
                 style={{ overflow: 'hidden' }}
               >
-                <DiffLines removed={extraDiff.removed} added={extraDiff.added} />
+                <DiffLines removed={extraDiff.removed} added={extraDiff.added} searchHighlight={searchHighlight} />
               </motion.div>
             )}
           </AnimatePresence>

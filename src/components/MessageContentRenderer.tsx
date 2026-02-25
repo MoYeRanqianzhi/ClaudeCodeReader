@@ -122,6 +122,7 @@ export const MessageContentRenderer = memo(function MessageContentRenderer({ blo
           block={block}
           projectPath={projectPath}
           searchAutoExpand={searchAutoExpand}
+          searchHighlight={searchHighlight}
         />
       );
 
