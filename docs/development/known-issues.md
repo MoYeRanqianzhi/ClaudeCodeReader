@@ -107,7 +107,9 @@ key.toLowerCase().includes('token') || key.toLowerCase().includes('key')
 
 ### 无自定义 Tauri Command
 
-当前 Rust 层未注册任何自定义 Tauri Command。所有文件系统操作均通过前端直接调用 `@tauri-apps/plugin-fs` 插件完成。
+~~当前 Rust 层未注册任何自定义 Tauri Command。所有文件系统操作均通过前端直接调用 `@tauri-apps/plugin-fs` 插件完成。~~
+
+**已变更**：Rust 后端已迁移为完整 MVC 架构，注册了 15 个自定义 Tauri Commands。前端通过 `invoke()` 调用后端命令获取处理后的数据。
 
 ### CSP 安全策略已禁用
 
@@ -148,7 +150,9 @@ Linux 版本使用 AppImage 格式分发，下载后需要 `chmod` 设置可执�
 
 ### 无分页加载
 
-会话消息一次性全量加载到内存中。对于包含大量消息的会话，可能影响性能。
+~~会话消息一次性全量加载到内存中。对于包含大量消息的会话，可能影响性能。~~
+
+**已优化**：引入 `useProgressiveRender` hook，基于 IntersectionObserver 实现视口驱动的渐进式渲染。300+ 消息会话首屏渲染时间从秒级降到毫秒级。Rust 后端仍一次性加载全部消息到内存，但使用 LRU 缓存（最多 20 个会话）控制内存占用。
 
 ### 主题持久化未实现
 
@@ -157,3 +161,32 @@ Linux 版本使用 AppImage 格式分发，下载后需要 `chmod` 设置可执�
 ### 窗口布局
 
 应用窗口最小宽度 800px / 最小高度 600px。在接近最小宽度时，工具栏按钮可能溢出可视区域（右侧按钮组设置了 `shrink-0` 防止变形，但可能被裁剪）。
+
+---
+
+## 近期已修复的问题
+
+### [已修复] 编辑消息极端卡顿
+
+- **原症状**：编辑消息时每次按键触发 300+ 条消息的 Markdown 重解析，耗时数秒
+- **修复**：React.memo 三层防护（MessageBlockList、MessageContentRenderer、MessageItem），编辑时仅重渲染被编辑的消息
+
+### [已修复] 搜索导航全量重渲染
+
+- **原症状**：搜索导航时 `setSearchAutoExpandId` 触发 ChatView 完整重渲染，300+ 消息全部重新执行 JSX
+- **修复**：`searchAutoExpandId` 从 useState 改为 useMemo 派生值；MessageItem 使用自定义比较器，搜索导航时仅 0~2 条消息重渲染
+
+### [已修复] 搜索闪烁动画被打断
+
+- **原症状**：搜索导航时闪烁动画被 React 重渲染打断，视觉上"突然闪一下"
+- **修复**：闪烁动画脱离 React 渲染周期，改用直接 DOM 操作添加/移除 CSS 类
+
+### [已修复] 折叠消息搜索导航不展开
+
+- **原症状**：搜索跳转到折叠的 thinking/tool_use/tool_result 块时不自动展开
+- **修复**：提取 useCollapsible hook，统一所有可折叠组件的展开/收起逻辑，支持 searchAutoExpand 信号穿透
+
+### [已修复] 工具块无搜索高亮
+
+- **原症状**：ToolUseRenderer 和 ToolResultRenderer 中的内容不显示搜索高亮
+- **修复**：提取 HighlightedText 共享组件，在工具名称、参数、diff 行、Raw JSON、结果内容中均支持搜索高亮

@@ -1,8 +1,158 @@
 # API 参考文档
 
-本文档详细说明 CCR 前端数据访问层的全部函数，定义于 `src/utils/claudeData.ts`。
+本文档详细说明 CCR 的 API 接口，包括：
+- **Rust Commands API**：后端通过 Tauri IPC 暴露的 15 个命令
+- **前端数据访问层**：`src/utils/claudeData.ts` 中封装的调用函数
+- **工具函数**：`toolFormatter.ts`、`messageTransform.ts` 等工具模块
 
-该模块是 CCR 的核心数据层，负责所有与 Claude Code 数据文件和 CCR 配置文件的交互。所有函数均通过 Tauri 插件 API（`@tauri-apps/plugin-fs`、`@tauri-apps/api/path`）进行文件系统操作，不依赖任何自定义的 Tauri Command。
+---
+
+## Rust Commands API
+
+前端通过 `invoke()` 调用 Rust 后端命令。所有命令均为异步，返回 `Result<T, String>`。
+
+### 项目扫描
+
+#### `scan_projects`
+
+扫描所有项目及其会话列表。
+
+```typescript
+const projects = await invoke<Project[]>('scan_projects');
+```
+
+- 使用 TTL 缓存（30 秒），重复调用直接返回缓存
+- 项目按最新会话时间降序排序
+
+### 消息操作
+
+#### `read_session_messages`
+
+读取并转换会话消息。
+
+```typescript
+const session = await invoke<TransformedSession>('read_session_messages', {
+  sessionPath: string,
+  projectPath: string,
+});
+```
+
+返回 `TransformedSession`：
+- `messages: DisplayMessage[]` — 前端可直接渲染的消息列表
+- `tool_use_map: Record<string, ToolUseInfo>` — 工具调用信息映射
+- `token_stats: TokenStats` — Token 使用量统计
+- `project_path: string` — 项目路径
+
+#### `delete_message`
+
+删除单条消息。
+
+```typescript
+const session = await invoke<TransformedSession>('delete_message', {
+  sessionPath: string,
+  messageUuid: string,
+  projectPath: string,
+});
+```
+
+#### `delete_messages`
+
+批量删除消息。
+
+```typescript
+const session = await invoke<TransformedSession>('delete_messages', {
+  sessionPath: string,
+  messageUuids: string[],
+  projectPath: string,
+});
+```
+
+#### `edit_message_content`
+
+按内容块编辑消息。
+
+```typescript
+const session = await invoke<TransformedSession>('edit_message_content', {
+  sessionPath: string,
+  messageUuid: string,
+  blockEdits: { index: number; type: string; text: string }[],
+  projectPath: string,
+});
+```
+
+#### `delete_session`
+
+删除会话文件。
+
+```typescript
+await invoke('delete_session', { sessionPath: string });
+```
+
+#### `search_session`
+
+4 模式全文搜索。
+
+```typescript
+const matchIds = await invoke<string[]>('search_session', {
+  sessionPath: string,
+  query: string,
+  caseSensitive: boolean,
+  useRegex: boolean,
+});
+```
+
+返回匹配的 `displayId` 列表。使用 memchr SIMD 加速搜索。
+
+#### `export_session`
+
+导出会话。
+
+```typescript
+const content = await invoke<string>('export_session', {
+  sessionPath: string,
+  format: 'markdown' | 'json',
+});
+```
+
+### 设置管理
+
+#### `get_claude_data_path`
+
+```typescript
+const path = await invoke<string>('get_claude_data_path');
+```
+
+#### `read_settings` / `save_settings`
+
+```typescript
+const settings = await invoke<ClaudeSettings>('read_settings', { claudePath: string });
+await invoke('save_settings', { claudePath: string, settings: ClaudeSettings });
+```
+
+#### `read_env_config` / `save_env_config`
+
+```typescript
+const config = await invoke<EnvSwitcherConfig>('read_env_config');
+await invoke('save_env_config', { config: EnvSwitcherConfig });
+```
+
+#### `read_history`
+
+```typescript
+const history = await invoke<Value[]>('read_history', { claudePath: string });
+```
+
+#### `check_file_exists`
+
+```typescript
+const exists = await invoke<boolean>('check_file_exists', { filePath: string });
+```
+
+---
+
+## 前端数据访问层 (`claudeData.ts`)
+
+以下函数封装了对 Rust Commands 的调用，提供更友好的 TypeScript 接口。
 
 ---
 
@@ -822,3 +972,56 @@ ID = Date.now().toString(36) + Math.random().toString(36).substring(2)
 - 这不是加密安全的随机生成器，不应用于安全敏感场景。
 
 **异常**：不会抛出异常。
+
+---
+
+## 工具函数模块
+
+### `toolFormatter.ts` — 工具参数格式化
+
+位于 `src/utils/toolFormatter.ts`，将工具调用的 input 参数提取为紧凑的显示字符串。
+
+#### `formatToolArgs(toolName, input, projectPath)`
+
+```typescript
+export function formatToolArgs(
+  toolName: string,
+  input: Record<string, unknown>,
+  projectPath: string
+): ToolFormatResult
+```
+
+返回 `{ args: string, filePath: string | null }`。
+
+支持的工具：
+
+| 工具 | 显示格式 | filePath |
+|------|---------|----------|
+| Read / Write / Edit | 相对文件路径 | 原始路径 |
+| Bash | 命令内容（截断 80 字符） | null |
+| Glob | 搜索模式 | null |
+| Grep | `pattern, path` | null |
+| Task | 任务描述（截断 60 字符） | null |
+| LSP | `operation, file:line` | 文件路径 |
+| AskUserQuestion | 问题内容（截断 80 字符） | null |
+| WebSearch | 搜索查询（截断 80 字符） | null |
+| WebFetch | URL（截断 80 字符） | null |
+| NotebookEdit | 笔记本路径 | 笔记本路径 |
+| TodoWrite | `N 项` | null |
+| 其他 | 第一个字符串参数或 `...` | null |
+
+### `messageTransform.ts` — 消息转换工具
+
+位于 `src/utils/messageTransform.ts`。
+
+#### `toRelativePath(absolutePath, projectPath)`
+
+将绝对路径简化为相对于项目目录的路径。
+
+```typescript
+export function toRelativePath(absolutePath: string, projectPath: string): string
+```
+
+### `rehypeHighlight.ts` — 语法高亮插件
+
+位于 `src/utils/rehypeHighlight.ts`，自定义 rehype 插件，支持 190+ 编程语言的语法高亮。基于 highlight.js 库。

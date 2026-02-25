@@ -6,25 +6,59 @@
 
 ## 架构说明
 
-CCR 的后端采用 **极简设计** 理念：
+CCR 的后端采用 **MVC 分层架构**，承担所有核心计算任务：
 
-- **零自定义 Tauri Command**：Rust 端没有注册任何 `#[tauri::command]`，不暴露自定义的 IPC 接口。
-- **所有业务逻辑在前端实现**：文件读写、数据解析、会话管理等全部由前端 TypeScript 通过 Tauri 插件 API 直接完成。
-- **Rust 端职责单一**：仅负责应用启动、窗口创建和插件初始化。
+- **Commands 层**（`commands/`）：Tauri IPC 接口，接收前端 `invoke()` 调用，委托给 Services 层处理
+- **Services 层**（`services/`）：核心业务逻辑，包括文件扫描、JSONL 解析、消息分类/转换、缓存管理、导出
+- **Models 层**（`models/`）：数据结构定义，与前端 TypeScript 类型一一对应
+- **Utils 层**（`utils/`）：通用工具函数（路径编解码等）
 
-这种设计的优势在于：
-1. 降低了前后端之间的耦合度，前端可以独立迭代业务逻辑。
-2. 减少了 Rust 编译时间，大多数改动只需重新构建前端。
-3. 充分利用 Tauri 插件生态，避免重复造轮子。
+### 设计原则
+
+1. **计算密集型操作在 Rust 端完成**：消息解析、分类、转换、Token 统计、文本搜索全部在 Rust 端执行
+2. **前端只负责渲染**：前端通过 `invoke()` 获取处理后的 `TransformedSession` 数据，直接渲染
+3. **多级缓存**：项目列表 TTL 缓存（30 秒）+ 会话消息 LRU 缓存（20 个）+ 搜索结果缓存
+4. **SIMD 加速搜索**：使用 memchr 库进行子串搜索，利用 CPU SIMD 指令集加速
+5. **并行处理**：使用 rayon 对大会话进行并行分类（map-reduce 模式）
 
 ---
 
-## 文件说明
+## 文件结构
+
+```
+src-tauri/src/
+├── main.rs                # Windows 子系统配置 + 入口点
+├── lib.rs                 # 应用初始化：插件注册 + Commands 注册 + 缓存初始化
+├── commands/              # Command 层（IPC 接口）
+│   ├── mod.rs             # 模块索引
+│   ├── projects.rs        # 项目扫描 commands (1 个)
+│   ├── messages.rs        # 消息读写/搜索/导出 commands (7 个)
+│   └── settings.rs        # 设置和配置 commands (7 个)
+├── models/                # 数据模型层
+│   ├── mod.rs             # 模块索引
+│   ├── project.rs         # Project、Session、FileHistorySnapshot
+│   ├── message.rs         # SessionMessage、MessageContent、ToolUseResult
+│   ├── display.rs         # DisplayMessage、ToolUseInfo、TokenStats、TransformedSession
+│   └── settings.rs        # ClaudeSettings、EnvProfile、EnvSwitcherConfig
+├── services/              # 业务逻辑层
+│   ├── mod.rs             # 模块索引
+│   ├── scanner.rs         # 项目/会话文件系统扫描（并行 I/O）
+│   ├── parser.rs          # JSONL 解析与写入
+│   ├── classifier.rs      # 消息分类（user/assistant/system/compact_summary）
+│   ├── transformer.rs     # 消息转换管线（DisplayMessage 生成）
+│   ├── cache.rs           # LRU 缓存 + TTL 缓存 + 搜索缓存
+│   └── export.rs          # Markdown/JSON 导出
+└── utils/
+    └── path.rs            # 路径编解码工具
+```
+
+---
+
+## 入口文件
 
 ### `src/main.rs` — Windows 子系统配置 + 入口点
 
 ```rust
-// Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
@@ -32,73 +66,185 @@ fn main() {
 }
 ```
 
-- `#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]`：条件编译属性，在 Release 模式下将 Windows 子系统设为 `"windows"`，从而隐藏控制台窗口。在 Debug 模式下保留控制台窗口便于查看日志输出。
-- `main()` 函数仅调用 `app_lib::run()`，将实际初始化逻辑委托给 `lib.rs`。
+- Release 模式下隐藏控制台窗口，Debug 模式保留便于查看日志
+- 仅调用 `app_lib::run()`，实际初始化逻辑在 `lib.rs`
 
-### `src/lib.rs` — Tauri Builder 配置与插件注册
+### `src/lib.rs` — 应用初始化
 
-```rust
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
-  tauri::Builder::default()
-    .plugin(tauri_plugin_fs::init())       // 文件系统访问插件
-    .plugin(tauri_plugin_dialog::init())   // 系统对话框插件
-    .plugin(tauri_plugin_shell::init())    // Shell 执行插件
-    .setup(|app| {
-      if cfg!(debug_assertions) {
-        app.handle().plugin(
-          tauri_plugin_log::Builder::default()
-            .level(log::LevelFilter::Info)
-            .build(),
-        )?;
-      }
-      Ok(())
-    })
-    .run(tauri::generate_context!())
-    .expect("error while running tauri application");
-}
+负责完整的 Tauri 应用初始化：
+
+1. 注册 5 个 Tauri 官方插件（fs、dialog、shell、opener、log）
+2. 初始化 `AppCache` 全局状态（`manage(AppCache::new())`）
+3. 注册 15 个自定义 Tauri Commands（`invoke_handler`）
+4. Debug 模式下启用日志插件
+
+---
+
+## Commands 层
+
+### `commands/projects.rs` — 项目扫描
+
+| Command | 签名 | 说明 |
+|---------|------|------|
+| `scan_projects` | `(cache: State<AppCache>) → Vec<Project>` | 扫描 ~/.claude/projects/ 目录，返回所有项目及其会话列表。使用 TTL 缓存（30 秒内重复调用直接返回缓存） |
+
+### `commands/messages.rs` — 消息操作
+
+| Command | 签名 | 说明 |
+|---------|------|------|
+| `read_session_messages` | `(session_path, project_path, cache) → TransformedSession` | 读取会话 JSONL，经过分类+转换管线，返回 DisplayMessage 列表 + toolUseMap + tokenStats |
+| `delete_message` | `(session_path, message_uuid, project_path, cache) → TransformedSession` | 删除单条消息，重新转换并返回 |
+| `delete_messages` | `(session_path, message_uuids, project_path, cache) → TransformedSession` | 批量删除消息 |
+| `edit_message_content` | `(session_path, message_uuid, block_edits, project_path, cache) → TransformedSession` | 按内容块编辑消息（支持 text 块精确编辑） |
+| `delete_session` | `(session_path, cache)` | 删除会话文件，清除缓存 |
+| `search_session` | `(session_path, query, case_sensitive, use_regex, cache) → Vec<String>` | 4 模式全文搜索，返回匹配的 displayId 列表 |
+| `export_session` | `(session_path, format, cache) → String` | 导出为 Markdown 或 JSON 格式 |
+
+### `commands/settings.rs` — 设置管理
+
+| Command | 签名 | 说明 |
+|---------|------|------|
+| `get_claude_data_path` | `() → String` | 获取 ~/.claude 路径 |
+| `read_settings` | `(claude_path) → ClaudeSettings` | 读取 settings.json |
+| `save_settings` | `(claude_path, settings)` | 保存 settings.json |
+| `read_env_config` | `() → EnvSwitcherConfig` | 读取环境配置 |
+| `save_env_config` | `(config)` | 保存环境配置 |
+| `read_history` | `(claude_path) → Vec<Value>` | 读取命令历史 |
+| `check_file_exists` | `(file_path) → bool` | 检查文件是否存在 |
+
+---
+
+## Services 层
+
+### `services/scanner.rs` — 文件系统扫描
+
+- 扫描 `~/.claude/projects/` 下所有项目目录
+- 每个项目目录下扫描 `.jsonl` 会话文件（排除 `agent-` 前缀）
+- 使用 `tokio::fs` 异步 I/O
+- 项目按最新会话时间降序排序
+- 会话按文件修改时间降序排序
+
+### `services/parser.rs` — JSONL 解析
+
+- 逐行解析 JSONL 文件为 `SessionMessage` 数组
+- 容错处理：无效 JSON 行静默跳过
+- 写入时将消息数组序列化为 JSONL 格式
+
+### `services/classifier.rs` — 消息分类器
+
+将原始 `SessionMessage` 分类为以下类型：
+
+| 分类 | 说明 |
+|------|------|
+| `user` | 用户消息 |
+| `assistant` | 助手消息 |
+| `system` | 系统消息（进一步识别子类型：skill、plan、plan_execution 等） |
+| `compact_summary` | 自动压缩摘要消息 |
+
+系统消息子类型识别：
+- **skill**：包含 `<skill-name>` 标签
+- **plan**：包含计划模式相关标记
+- **plan_execution**：计划执行消息，包含会话跳转信息
+- **compact_summary**：`isSummary: true` 的压缩摘要
+
+### `services/transformer.rs` — 消息转换管线
+
+核心转换流程：
+
+```
+SessionMessage[] → classify → split → build DisplayMessage[]
+                                    → build toolUseMap
+                                    → calculate tokenStats
+                                    → return TransformedSession
 ```
 
-- `#[cfg_attr(mobile, tauri::mobile_entry_point)]`：为移动端编译预留的入口点标注（当前项目仅面向桌面端）。
-- 4 个插件通过 `.plugin()` 链式注册。
-- 日志插件 (`tauri_plugin_log`) 仅在 Debug 模式下启用，日志级别设为 `Info`。
-- `tauri::generate_context!()` 宏在编译时读取 `tauri.conf.json` 生成应用上下文。
+- 将原始消息拆分为独立的 DisplayMessage（一条 assistant 消息可能拆分为多个 tool_use + text 块）
+- 构建 `toolUseMap`：tool_use_id → ToolUseInfo（工具名称、参数、关联文件路径）
+- 计算 `tokenStats`：汇总整个会话的 input/output/cache Token 使用量
 
-### `build.rs` — Tauri 构建代码生成
+### `services/cache.rs` — 缓存管理
 
-```rust
-fn main() {
-  tauri_build::build()
-}
+```
+AppCache
+├── project_cache: Mutex<Option<(Vec<Project>, Instant)>>  # TTL 缓存（30 秒）
+├── session_cache: Mutex<LruCache<String, Vec<SessionMessage>>>  # LRU 缓存（20 个）
+└── search_cache: Mutex<HashMap<String, Vec<String>>>  # 搜索结果缓存
 ```
 
-- 这是 Tauri 的标准构建脚本，负责在编译前生成必要的平台胶水代码（如 Windows 的资源文件、图标嵌入等）。
-- 不需要修改此文件，除非有特殊的构建需求。
+- **项目列表缓存**：30 秒 TTL，避免频繁扫描文件系统
+- **会话消息缓存**：LRU 策略，最多缓存 20 个会话的原始消息
+- **搜索结果缓存**：按 `session_path + query + options` 组合键缓存
+
+### `services/export.rs` — 会话导出
+
+- **Markdown 格式**：按消息角色分段，代码块保留语法高亮标记
+- **JSON 格式**：原始 SessionMessage 数组的 JSON 序列化
+
+---
+
+## Models 层
+
+### `models/project.rs`
+
+| 结构体 | 说明 |
+|--------|------|
+| `Project` | 项目信息：name（编码名）、path（解码路径）、sessions |
+| `Session` | 会话信息：id、timestamp、filePath、messageCount |
+| `FileHistorySnapshot` | 文件历史快照 |
+
+### `models/message.rs`
+
+| 结构体 | 说明 |
+|--------|------|
+| `SessionMessage` | 原始会话消息：uuid、type、message、timestamp 等 |
+| `MessageContent` | 消息内容块：type（text/tool_use/tool_result/thinking/image）+ 对应字段 |
+| `ToolUseResult` | 工具调用结果 |
+
+### `models/display.rs`
+
+| 结构体 | 说明 |
+|--------|------|
+| `DisplayMessage` | 前端渲染用消息：displayId、displayType、content、sourceUuid 等 |
+| `ToolUseInfo` | 工具调用信息：toolName、filePath（用于"打开文件位置"按钮） |
+| `TokenStats` | Token 统计：inputTokens、outputTokens、cacheReadTokens、cacheCreationTokens |
+| `TransformedSession` | 转换后的完整会话：messages + toolUseMap + tokenStats + projectPath |
+
+### `models/settings.rs`
+
+| 结构体 | 说明 |
+|--------|------|
+| `ClaudeSettings` | Claude Code 设置：env、model、permissions、apiKey 等 |
+| `EnvProfile` | 环境配置：id、name、env、createdAt、updatedAt |
+| `EnvSwitcherConfig` | 环境切换器配置：profiles、activeProfileId |
 
 ---
 
 ## Rust 依赖列表
 
-以下为 `Cargo.toml` 中声明的所有依赖及其用途：
-
 ### 构建依赖 (`[build-dependencies]`)
 
 | 依赖 | 版本 | 用途 |
 |------|------|------|
-| `tauri-build` | 2.5.3 | Tauri 构建脚本，生成平台相关的编译产物 |
+| `tauri-build` | 2.5.3 | Tauri 构建脚本 |
 
 ### 运行依赖 (`[dependencies]`)
 
 | 依赖 | 版本 | 用途 |
 |------|------|------|
-| `tauri` | 2.9.5 | Tauri 核心框架，提供窗口管理、IPC 通信等基础能力 |
-| `serde` | 1.0 (含 `derive` feature) | Rust 序列化/反序列化框架，用于数据结构转换 |
-| `serde_json` | 1.0 | JSON 序列化/反序列化支持 |
-| `log` | 0.4 | Rust 日志门面 (logging facade)，提供统一的日志宏 |
-| `tauri-plugin-fs` | 2 | 文件系统访问插件，前端通过此插件读写本地文件 |
-| `tauri-plugin-dialog` | 2 | 系统对话框插件，提供文件选择、消息提示等原生对话框 |
-| `tauri-plugin-shell` | 2 | Shell 执行插件，允许前端调用系统命令 |
-| `tauri-plugin-log` | 2 | 日志插件，在 Debug 模式下将日志输出到控制台 |
+| `tauri` | 2.9.5 | Tauri 核心框架 |
+| `serde` | 1.0 (derive) | 序列化/反序列化 |
+| `serde_json` | 1.0 | JSON 处理 |
+| `log` | 0.4 | 日志门面 |
+| `tauri-plugin-fs` | 2 | 文件系统插件 |
+| `tauri-plugin-dialog` | 2 | 系统对话框插件 |
+| `tauri-plugin-shell` | 2 | Shell 执行插件 |
+| `tauri-plugin-opener` | 2 | 文件管理器集成插件 |
+| `tauri-plugin-log` | 2 | 日志插件（仅 Debug） |
+| `tokio` | 1 (fs, rt) | 异步文件 I/O |
+| `dirs` | 6 | 跨平台主目录获取 |
+| `regex` | 1 | 正则表达式（计划消息检测） |
+| `rayon` | 1.10 | 数据并行（大会话分类） |
+| `memchr` | 2 | SIMD 加速子串搜索 |
 
 ### 包元数据
 
@@ -106,271 +252,87 @@ fn main() {
 |------|------|------|
 | `name` | `claude-code-reader` | Cargo 包名称 |
 | `version` | `1.3.0-beta.1` | 当前版本号 |
-| `edition` | `2021` | Rust 版本 (Edition) |
-| `rust-version` | `1.77.2` | 最低 Rust 工具链版本要求 |
+| `edition` | `2024` | Rust 版本 (Edition) |
+| `rust-version` | `1.85` | 最低 Rust 工具链版本 |
 | `license` | `MIT` | 开源许可证 |
-
-### 库配置
-
-```toml
-[lib]
-name = "app_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
-```
-
-- `staticlib`：静态链接库，用于 iOS 等平台。
-- `cdylib`：C 动态链接库，用于 Android 等平台。
-- `rlib`：Rust 原生库，用于桌面端链接。
 
 ---
 
 ## Tauri 插件配置
 
-### tauri-plugin-fs — 文件系统访问
+### 已注册插件（5 个）
 
-**注册方式**：在 `lib.rs` 中通过 `.plugin(tauri_plugin_fs::init())` 注册。
-
-**作用**：允许前端 TypeScript 代码通过 `@tauri-apps/plugin-fs` 模块读写本地文件系统。CCR 的所有文件操作（读取会话记录、编辑消息、保存设置等）都通过此插件实现。
-
-**配置** (`tauri.conf.json` 中)：
-```json
-"plugins": {
-  "fs": {
-    "requireLiteralLeadingDot": false
-  }
-}
-```
-`requireLiteralLeadingDot: false` 表示在路径匹配时，不要求 `.` 开头的文件/目录名必须显式匹配。这对于访问 `~/.claude` 等隐藏目录是必要的。
-
-### tauri-plugin-dialog — 系统对话框
-
-**注册方式**：在 `lib.rs` 中通过 `.plugin(tauri_plugin_dialog::init())` 注册。
-
-**作用**：提供原生系统对话框能力，包括文件/目录选择对话框、消息提示框等。CCR 中可用于用户选择 Claude 数据目录等场景。
-
-### tauri-plugin-shell — Shell 执行
-
-**注册方式**：在 `lib.rs` 中通过 `.plugin(tauri_plugin_shell::init())` 注册。
-
-**作用**：允许前端调用系统 Shell 命令或打开外部链接。例如用 `shell:default` 权限打开外部 URL。
-
-### tauri-plugin-log — 调试日志（仅 Debug 模式）
-
-**注册方式**：在 `lib.rs` 的 `.setup()` 闭包中条件注册。
-
-```rust
-if cfg!(debug_assertions) {
-  app.handle().plugin(
-    tauri_plugin_log::Builder::default()
-      .level(log::LevelFilter::Info)
-      .build(),
-  )?;
-}
-```
-
-**作用**：在开发调试时将日志输出到控制台，日志级别为 `Info` 及以上。Release 构建中不会包含此插件，避免影响性能和泄露调试信息。
+| 插件 | 注册方式 | 用途 |
+|------|---------|------|
+| `tauri-plugin-fs` | `.plugin(tauri_plugin_fs::init())` | 文件系统访问（主要供导出功能使用，数据加载已迁移到 Rust 后端） |
+| `tauri-plugin-dialog` | `.plugin(tauri_plugin_dialog::init())` | 系统对话框（文件保存对话框） |
+| `tauri-plugin-shell` | `.plugin(tauri_plugin_shell::init())` | Shell 操作（打开外部链接） |
+| `tauri-plugin-opener` | `.plugin(tauri_plugin_opener::init())` | 文件管理器集成（在文件管理器中定位文件） |
+| `tauri-plugin-log` | `.setup()` 中条件注册 | 调试日志（仅 Debug 模式，Info 级别） |
 
 ---
 
-## Tauri 配置详解 (`tauri.conf.json`)
-
-### 基本信息
-
-```json
-{
-  "productName": "ClaudeCodeReader",
-  "version": "1.3.0-beta.1",
-  "identifier": "com.claudecodereader.app"
-}
-```
-
-- `productName`：应用的显示名称，用于窗口标题、安装包名等。
-- `version`：应用版本号，与 `Cargo.toml` 保持一致。
-- `identifier`：应用的唯一标识符，采用反向域名格式。用于操作系统级别的应用识别。
-
-### 构建配置
-
-```json
-"build": {
-  "frontendDist": "../dist",
-  "devUrl": "http://localhost:5173",
-  "beforeDevCommand": "npm run dev",
-  "beforeBuildCommand": "npm run build"
-}
-```
-
-- `frontendDist`：前端构建产物的输出目录，相对于 `src-tauri` 目录。
-- `devUrl`：开发模式下前端开发服务器的 URL（Vite 默认端口 5173）。
-- `beforeDevCommand`：执行 `tauri dev` 前自动启动前端开发服务器。
-- `beforeBuildCommand`：执行 `tauri build` 前自动构建前端产物。
+## Tauri 配置 (`tauri.conf.json`)
 
 ### 窗口配置
-
-```json
-"app": {
-  "windows": [
-    {
-      "title": "Claude Code Reader",
-      "width": 1200,
-      "height": 800,
-      "minWidth": 800,
-      "minHeight": 600,
-      "resizable": true,
-      "fullscreen": false,
-      "center": true
-    }
-  ]
-}
-```
 
 | 属性 | 值 | 说明 |
 |------|------|------|
 | `title` | "Claude Code Reader" | 窗口标题 |
-| `width` / `height` | 1200 x 800 | 默认窗口尺寸（像素） |
-| `minWidth` / `minHeight` | 800 x 600 | 最小窗口尺寸，防止布局错乱 |
-| `resizable` | `true` | 允许用户调整窗口大小 |
-| `fullscreen` | `false` | 启动时不进入全屏模式 |
-| `center` | `true` | 启动时窗口居中显示 |
+| `width` / `height` | 1200 x 800 | 默认窗口尺寸 |
+| `minWidth` / `minHeight` | 800 x 600 | 最小窗口尺寸 |
+| `resizable` | `true` | 允许调整大小 |
+| `center` | `true` | 启动时居中 |
 
 ### 安全配置
 
-```json
-"security": {
-  "csp": null
-}
-```
-
-**CSP 设为 `null` 的原因**：
-- CSP (Content Security Policy) 被设为 `null` 意味着禁用内容安全策略。
-- CCR 是一个纯本地应用，不加载任何远程资源，所有数据来源于本地文件系统。
-- Tauri 应用运行在独立的 WebView 容器中，已有进程级别的隔离。
-- 禁用 CSP 简化了开发过程，避免因策略限制导致的本地文件访问问题。
-- **注意**：如果未来需要加载远程资源（如 CDN 脚本、外部 API），应重新启用并配置 CSP。
-
-### 打包配置
-
-```json
-"bundle": {
-  "active": true,
-  "targets": "all",
-  "icon": [
-    "icons/32x32.png",
-    "icons/128x128.png",
-    "icons/128x128@2x.png",
-    "icons/icon.icns",
-    "icons/icon.ico"
-  ]
-}
-```
-
-- `active: true`：启用打包功能。
-- `targets: "all"`：为当前平台的所有格式生成安装包（Windows 下为 `.msi` + `.exe`，macOS 下为 `.dmg` + `.app`）。
-- `icon`：各平台所需的图标文件列表。
-
-### 插件配置
-
-```json
-"plugins": {
-  "fs": {
-    "requireLiteralLeadingDot": false
-  }
-}
-```
-
-详见上文「tauri-plugin-fs」部分的说明。
+- CSP 设为 `null`（禁用），因为 CCR 是纯本地应用，不加载远程资源
 
 ---
 
 ## 安全权限 (`capabilities/default.json`)
 
-`capabilities/default.json` 定义了应用的安全能力 (Capabilities)，控制前端 WebView 可以调用哪些 Tauri API。
-
-```json
-{
-  "identifier": "default",
-  "description": "enables the default permissions",
-  "windows": ["main"],
-  "permissions": [...]
-}
-```
-
-- `identifier: "default"`：能力集标识，Tauri 会自动应用名为 `default` 的能力集。
-- `windows: ["main"]`：此能力集仅适用于主窗口。
-
-### 权限列表
-
 | 权限标识 | 说明 |
 |---------|------|
-| `core:default` | Tauri 核心默认权限，包含基本的窗口操作、事件通信等能力 |
-| `fs:default` | 文件系统插件的默认权限集 |
-| `fs:allow-read-dir` | 允许读取目录列表（`readDir` 操作） |
-| `fs:allow-read-file` | 允许读取文件内容（`readTextFile` / `readFile` 操作） |
-| `fs:allow-write-file` | 允许写入文件内容（`writeTextFile` / `writeFile` 操作） |
-| `fs:allow-exists` | 允许检查文件/目录是否存在（`exists` 操作） |
-| `fs:allow-stat` | 允许获取文件元数据（`stat` 操作，如修改时间、文件大小） |
-| `fs:allow-home-read-recursive` | 允许递归读取用户主目录 (`~`) 下的所有文件和子目录 |
-| `fs:allow-home-write-recursive` | 允许递归写入用户主目录 (`~`) 下的所有文件和子目录 |
-| `dialog:default` | 对话框插件默认权限，允许打开文件选择对话框、消息对话框等 |
-| `shell:default` | Shell 插件默认权限，允许打开外部 URL |
-
-### 权限设计说明
-
-- `fs:allow-home-read-recursive` 和 `fs:allow-home-write-recursive` 是 CCR 的核心权限，因为 Claude Code 的数据目录 (`~/.claude`) 和 CCR 的配置目录 (`~/.mo/CCR`) 都位于用户主目录下。
-- 这些权限的作用范围限定在用户主目录内，不会访问系统级别的文件。
-- 没有授予 `fs:allow-remove` 等危险权限，CCR 不会删除任何文件。
+| `core:default` | Tauri 核心默认权限 |
+| `fs:default` | 文件系统默认权限 |
+| `fs:allow-read-dir` | 读取目录列表 |
+| `fs:allow-read-file` | 读取文件内容 |
+| `fs:allow-write-file` | 写入文件内容 |
+| `fs:allow-exists` | 检查文件存在 |
+| `fs:allow-stat` | 获取文件元数据 |
+| `fs:allow-home-read-recursive` | 递归读取用户主目录 |
+| `fs:allow-home-write-recursive` | 递归写入用户主目录 |
+| `dialog:default` | 对话框默认权限 |
+| `shell:default` | Shell 默认权限 |
 
 ---
 
 ## 如何添加新的 Tauri Command
 
-虽然当前 CCR 不使用自定义 Command，但未来可能需要将某些性能敏感的操作移至 Rust 端。以下是添加新 Command 的步骤：
-
-### 第 1 步：在 `lib.rs` 中定义 Command 函数
+### 第 1 步：在对应的 commands 子模块中定义函数
 
 ```rust
-/// 示例 Command：计算目录中的 JSONL 文件数量
-///
-/// # 参数
-/// - `path`: 目标目录的绝对路径
-///
-/// # 返回值
-/// 文件数量（u32），如果目录不存在则返回错误
+// commands/messages.rs 中添加新 command
 #[tauri::command]
-async fn count_jsonl_files(path: String) -> Result<u32, String> {
-    let dir = std::path::Path::new(&path);
-    if !dir.exists() {
-        return Err(format!("目录不存在: {}", path));
-    }
-
-    let count = std::fs::read_dir(dir)
-        .map_err(|e| e.to_string())?
-        .filter_map(|entry| entry.ok())
-        .filter(|entry| {
-            entry.path().extension()
-                .map(|ext| ext == "jsonl")
-                .unwrap_or(false)
-        })
-        .count();
-
-    Ok(count as u32)
+pub async fn my_new_command(
+    session_path: String,
+    cache: tauri::State<'_, AppCache>,
+) -> Result<MyResult, String> {
+    // 调用 services 层的业务逻辑
+    let result = services::my_service::do_something(&session_path)
+        .map_err(|e| e.to_string())?;
+    Ok(result)
 }
 ```
 
-### 第 2 步：注册 Command 到 Tauri Builder
-
-在 `lib.rs` 的 `run()` 函数中添加 `.invoke_handler()`：
+### 第 2 步：在 `lib.rs` 的 `invoke_handler` 中注册
 
 ```rust
-tauri::Builder::default()
-    .plugin(tauri_plugin_fs::init())
-    .plugin(tauri_plugin_dialog::init())
-    .plugin(tauri_plugin_shell::init())
-    .invoke_handler(tauri::generate_handler![count_jsonl_files]) // 新增
-    .setup(|app| {
-      // ...
-    })
-    .run(tauri::generate_context!())
-    .expect("error while running tauri application");
+.invoke_handler(tauri::generate_handler![
+    // ... 现有 commands
+    commands::messages::my_new_command,  // 新增
+])
 ```
 
 ### 第 3 步：在前端调用
@@ -378,19 +340,15 @@ tauri::Builder::default()
 ```typescript
 import { invoke } from '@tauri-apps/api/core';
 
-// 调用自定义 Command
-const count = await invoke<number>('count_jsonl_files', {
-  path: '/home/user/.claude/projects'
+const result = await invoke<MyResult>('my_new_command', {
+  sessionPath: '/path/to/session.jsonl',
 });
 ```
 
-### 第 4 步：更新安全权限（如需要）
-
-如果新 Command 涉及额外的系统权限，需要在 `capabilities/default.json` 中添加相应权限声明。
-
 ### 注意事项
 
-- Command 函数名在 Rust 端使用 `snake_case`，前端调用时同样使用 `snake_case`。
-- 异步 Command 使用 `async fn` 声明，Tauri 会自动在线程池中执行。
-- 返回 `Result<T, String>` 类型，错误信息会传递到前端的 `catch` 中。
-- 如果 Command 需要访问 Tauri 的应用状态，可以使用 `tauri::State` 参数注入。
+- Command 函数名使用 `snake_case`，前端调用时同样使用 `snake_case`
+- 异步 Command 使用 `async fn`，Tauri 在线程池中执行
+- 返回 `Result<T, String>`，错误信息传递到前端 `catch`
+- 需要缓存时通过 `tauri::State<'_, AppCache>` 参数注入
+- 业务逻辑应放在 `services/` 层，command 函数只做参数转换和错误映射

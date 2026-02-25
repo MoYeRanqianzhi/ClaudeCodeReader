@@ -79,17 +79,27 @@ claude-code-reader/src/
 ├── App.tsx                     # 根组件，集中管理全局状态和回调函数
 ├── index.css                   # 全局样式，Tailwind CSS 导入 + 主题变量 + 内容块样式
 ├── types/
-│   └── claude.ts               # TypeScript 类型定义（所有接口和类型）
+│   └── claude.ts               # TypeScript 类型定义（20+ 个接口）
+├── hooks/
+│   ├── useCollapsible.ts       # 统一折叠/展开 hook（搜索导航自动展开）
+│   └── useProgressiveRender.ts # 视口驱动渐进式渲染 hook
 ├── utils/
-│   └── claudeData.ts           # 数据访问层，封装所有 Tauri 文件操作
+│   ├── claudeData.ts           # 数据访问层，调用 Rust Commands
+│   ├── toolFormatter.ts        # 工具参数格式化（15+ 种工具）
+│   ├── messageTransform.ts     # 消息转换与路径简化工具
+│   └── rehypeHighlight.ts      # 自定义 rehype 语法高亮插件
 ├── components/
-│   ├── index.ts                # 组件统一导出桶文件（6 个组件）
-│   ├── Sidebar.tsx             # 侧边栏组件（项目列表、搜索、环境切换、会话删除）
-│   ├── ChatView.tsx            # 聊天视图组件（消息列表、搜索、过滤、编辑、多选、导出）
-│   ├── SettingsPanel.tsx       # 设置面板组件（模态框，四个标签页，动画过渡）
-│   ├── EnvSwitcher.tsx         # 环境配置切换器组件（下拉菜单，动画）
-│   ├── MessageBlockList.tsx    # 消息内容块列表入口（处理 string / array 两种格式）
-│   └── MessageContentRenderer.tsx # 消息内容块渲染器（5 种内容类型分类渲染）
+│   ├── index.ts                # 组件统一导出桶文件
+│   ├── Sidebar.tsx             # 侧边栏（项目列表、搜索、环境切换、会话删除）
+│   ├── ChatView.tsx            # 聊天视图（消息渲染、搜索导航、编辑、多选、导出）
+│   ├── SettingsPanel.tsx       # 设置面板（模态框，四个标签页）
+│   ├── EnvSwitcher.tsx         # 环境配置切换器（下拉菜单）
+│   ├── MessageBlockList.tsx    # 消息内容块列表入口（React.memo 优化）
+│   ├── MessageContentRenderer.tsx # 内容块渲染器（5 种类型 + ThinkingBlock）
+│   ├── ToolUseRenderer.tsx     # 工具调用渲染器（紧凑格式 + diff + Raw）
+│   ├── ToolResultRenderer.tsx  # 工具结果渲染器（折叠 + 打开文件位置）
+│   ├── HighlightedText.tsx     # 搜索高亮文本组件（3 种匹配模式）
+│   └── MarkdownRenderer.tsx    # Markdown 渲染器（react-markdown + 语法高亮）
 └── assets/
     └── react.svg               # React logo 静态资源
 ```
@@ -99,17 +109,25 @@ claude-code-reader/src/
 | 文件 | 职责 |
 |------|------|
 | `main.tsx` | 创建 React 根节点，使用 `StrictMode` 包裹 `App` 组件 |
-| `App.tsx` | 全局状态管理中枢；定义 16 个状态变量和 18 个 `useCallback` 回调；协调子组件间的数据流 |
+| `App.tsx` | 全局状态管理中枢；协调子组件间的数据流 |
 | `index.css` | 定义浅色/深色模式的 CSS 自定义属性；引入 Tailwind CSS 4；定义内容块样式、渐变、滚动条、动画等自定义类 |
-| `types/claude.ts` | 定义所有 TypeScript 接口：`ClaudeSettings`、`EnvProfile`、`SessionMessage`、`MessageContent`、`Project`、`Session` 等 |
-| `utils/claudeData.ts` | 封装所有文件读写操作（设置、会话消息、环境配置）；使用动态 `import()` 加载 Tauri 模块 |
-| `components/index.ts` | 组件桶文件，统一导出 6 个组件供 `App.tsx` 导入 |
-| `Sidebar.tsx` | 左侧导航栏：搜索过滤、项目展开/折叠、会话选择/删除、环境配置切换器嵌入、拖动宽度调整 |
-| `ChatView.tsx` | 主内容区域：消息搜索、角色过滤、消息编辑/删除/复制、多选批量操作、导出、Token 统计 |
-| `SettingsPanel.tsx` | 模态设置面板：主题三模式切换（动画）、模型、数据路径、环境变量管理、权限查看、关于 |
-| `EnvSwitcher.tsx` | 环境配置选择器：下拉列表（动画）、保存当前配置、编辑/删除配置 |
-| `MessageBlockList.tsx` | 消息内容渲染入口：处理 string 和 MessageContent[] 两种 content 格式 |
-| `MessageContentRenderer.tsx` | 内容块渲染器：按 type 分类渲染 text、tool_use、tool_result、thinking、image 五种内容块 |
+| `types/claude.ts` | 定义所有 TypeScript 接口（20+ 个），与 Rust Models 层一一对应 |
+| `hooks/useCollapsible.ts` | 统一折叠/展开逻辑，支持搜索导航自动展开/收起 |
+| `hooks/useProgressiveRender.ts` | 基于 IntersectionObserver 的视口驱动渐进式渲染 |
+| `utils/claudeData.ts` | 数据访问层，通过 `invoke()` 调用 Rust Commands |
+| `utils/toolFormatter.ts` | 格式化 15+ 种工具参数为紧凑显示字符串 |
+| `utils/messageTransform.ts` | 消息转换工具（路径简化、文本提取等） |
+| `utils/rehypeHighlight.ts` | 自定义 rehype 插件，190+ 编程语言语法高亮 |
+| `Sidebar.tsx` | 左侧导航栏：搜索过滤、项目展开/折叠、会话选择/删除、环境配置切换器 |
+| `ChatView.tsx` | 主内容区域：消息渲染、VSCode 风格搜索导航、编辑/删除、多选、导出 |
+| `SettingsPanel.tsx` | 模态设置面板：主题切换、模型、环境变量管理、权限查看 |
+| `EnvSwitcher.tsx` | 环境配置选择器：下拉列表、保存/编辑/删除配置 |
+| `MessageBlockList.tsx` | 消息内容渲染入口（React.memo 优化），接收 Rust 预处理的 content 数组 |
+| `MessageContentRenderer.tsx` | 按 type 分类渲染 text、tool_use、tool_result、thinking、image 五种内容块 |
+| `ToolUseRenderer.tsx` | 工具调用紧凑渲染：`Tool(args)` 格式 + diff 预览 + Raw JSON 切换 |
+| `ToolResultRenderer.tsx` | 工具结果折叠渲染 + 打开文件位置按钮 |
+| `HighlightedText.tsx` | 搜索高亮共享组件：字面量/正则 3 种匹配模式 |
+| `MarkdownRenderer.tsx` | Markdown 渲染：react-markdown + remark-gfm + 语法高亮 |
 
 ---
 
@@ -252,65 +270,41 @@ App (所有状态)
 
 ## Tauri API 调用方式
 
-### 动态导入模式
+### invoke() 调用 Rust Commands
 
-所有 Tauri 模块均通过 **动态 `import()`** 加载，而非静态顶层导入。这确保了在纯浏览器环境中前端代码不会因缺少 Tauri 运行时而崩溃：
+数据操作通过 `invoke()` 调用 Rust 后端的自定义 Commands，而非直接调用 Tauri 插件 API：
 
-```tsx
-// 动态导入 Tauri 路径模块
-const { homeDir, join } = await import('@tauri-apps/api/path');
+```typescript
+import { invoke } from '@tauri-apps/api/core';
 
-// 动态导入 Tauri 文件系统插件
-const { readTextFile, exists, writeTextFile } = await import('@tauri-apps/plugin-fs');
-const { readDir, stat, mkdir } = await import('@tauri-apps/plugin-fs');
+// 调用 Rust command 读取会话
+const session = await invoke<TransformedSession>('read_session_messages', {
+  sessionPath: '/path/to/session.jsonl',
+  projectPath: '/path/to/project',
+});
 
-// 动态导入 Tauri 对话框插件（用于导出功能）
-const { save } = await import('@tauri-apps/plugin-dialog');
+// 调用 Rust command 搜索
+const matchIds = await invoke<string[]>('search_session', {
+  sessionPath: '/path/to/session.jsonl',
+  query: 'search term',
+  caseSensitive: false,
+  useRegex: false,
+});
 ```
 
-### 文件操作封装
+### 仍使用插件 API 的场景
 
-所有文件操作通过 `@tauri-apps/plugin-fs` 插件完成，不使用 Node.js `fs` 模块。主要使用的 API 包括：
+部分操作仍通过 Tauri 插件 API 完成：
 
 | API | 用途 |
 |-----|------|
-| `readTextFile(path)` | 读取文本文件内容 |
-| `writeTextFile(path, content)` | 写入文本文件 |
-| `exists(path)` | 检查文件/目录是否存在 |
-| `readDir(path)` | 读取目录列表 |
-| `stat(path)` | 获取文件元信息（修改时间等） |
-| `mkdir(path, { recursive })` | 创建目录 |
-| `remove(path)` | 删除文件 |
-
-### 不使用自定义 Tauri Commands
-
-本项目完全不使用 Rust 端自定义命令（`#[tauri::command]`）。所有数据读写均通过前端直接调用 Tauri 文件系统插件完成，这简化了开发流程，不需要在前后端之间定义和维护命令接口。
+| `@tauri-apps/plugin-dialog` | 文件保存对话框（导出功能） |
+| `@tauri-apps/plugin-fs` | 导出文件写入 |
+| `@tauri-apps/plugin-opener` | 在文件管理器中定位文件 |
 
 ### 数据访问层：`utils/claudeData.ts`
 
-所有数据操作函数集中封装在 `claudeData.ts` 中，对外暴露以下公共函数：
-
-| 函数 | 签名 | 说明 |
-|------|------|------|
-| `getClaudeDataPath` | `() => Promise<string>` | 获取 `~/.claude` 路径 |
-| `getProjects` | `(claudePath) => Promise<Project[]>` | 读取所有项目及其会话列表 |
-| `readSettings` | `(claudePath) => Promise<ClaudeSettings>` | 读取 `settings.json` |
-| `saveSettings` | `(claudePath, settings) => Promise<void>` | 保存 `settings.json` |
-| `readSessionMessages` | `(filePath) => Promise<SessionMessage[]>` | 读取会话 JSONL 文件 |
-| `saveSessionMessages` | `(filePath, messages) => Promise<void>` | 保存会话 JSONL 文件 |
-| `deleteMessage` | `(filePath, uuid) => Promise<SessionMessage[]>` | 删除指定消息并保存 |
-| `deleteMessages` | `(filePath, uuids) => Promise<SessionMessage[]>` | 批量删除消息并保存 |
-| `editMessageContent` | `(filePath, uuid, newContent) => Promise<SessionMessage[]>` | 编辑消息内容并保存 |
-| `deleteSession` | `(sessionFilePath) => Promise<void>` | 删除会话文件 |
-| `exportAsMarkdown` | `(messages, sessionName) => string` | 将消息导出为 Markdown 格式 |
-| `exportAsJson` | `(messages) => string` | 将消息导出为 JSON 格式 |
-| `readEnvSwitcherConfig` | `(claudePath) => Promise<EnvSwitcherConfig>` | 读取环境配置 |
-| `saveEnvSwitcherConfig` | `(claudePath, config) => Promise<void>` | 保存环境配置 |
-| `applyEnvProfile` | `(claudePath, profile) => Promise<ClaudeSettings>` | 应用环境配置到 settings |
-| `saveCurrentAsProfile` | `(claudePath, name) => Promise<EnvProfile>` | 将当前环境保存为新配置 |
-| `readHistory` | `(claudePath) => Promise<HistoryEntry[]>` | 读取历史记录（未使用） |
-| `getMessageText` | `(message) => string` | 提取消息的纯文本内容 |
-| `formatTimestamp` | `(timestamp) => string` | 格式化时间戳为中文本地化字符串 |
+所有数据操作函数集中封装在 `claudeData.ts` 中，内部调用 `invoke()` 与 Rust 后端通信。
 
 ### 数据文件路径约定
 
@@ -437,3 +431,104 @@ import { motion, AnimatePresence } from 'motion/react';
 - **TypeScript 严格模式**：所有代码必须通过 TypeScript 编译检查（`tsc -b`）
 - **动画性能**：拖动操作时使用 `transition={{ duration: 0 }}` 禁用动画；使用 `useRef` 追踪频繁变化的状态避免闭包问题
 - **Flex 布局**：注意 flex 子项默认 `min-width: auto` 的陷阱，需要添加 `min-w-0` 防止内容撑开布局
+
+---
+
+## 自定义 Hooks
+
+### useCollapsible — 统一折叠/展开
+
+位于 `src/hooks/useCollapsible.ts`，统一管理所有可折叠组件的展开/收起逻辑。
+
+```typescript
+const { expanded, handleManualToggle } = useCollapsible(searchAutoExpand);
+```
+
+- `searchAutoExpand` 为 `true` 时自动展开，变为 `false` 时自动收起
+- 手动点击展开后，`searchAutoExpand` 变化不再影响（通过 `wasAutoExpandedRef` 追踪）
+- 使用 `useEffect`（非渲染阶段状态派生）确保在 React.memo 下行为可靠
+
+使用组件：CompactSummaryBlock、SystemMessageBlock、ThinkingBlock、ToolUseRenderer、ToolResultRenderer
+
+### useProgressiveRender — 渐进式渲染
+
+位于 `src/hooks/useProgressiveRender.ts`，基于 IntersectionObserver 实现视口驱动的虚拟化渲染。
+
+- 仅渲染视口内及附近的消息，视口外显示占位符 `<div>`
+- 300+ 消息会话首屏渲染时间从秒级降到毫秒级
+- 返回 `isRendered(index)` 函数供 `.map()` 中判断
+
+---
+
+## 搜索系统
+
+### 架构概览
+
+```
+ChatView
+├── NavSearchBar (Ctrl+F 唤起)
+│   ├── 搜索输入框 + 4 模式切换按钮
+│   └── 上/下导航按钮 + 匹配计数
+├── searchHighlight: SearchHighlight (穿透到所有渲染组件)
+├── searchAutoExpandId: string | null (useMemo 派生)
+└── 导航 useEffect (滚动 + 闪烁 + 自动展开)
+```
+
+### 搜索模式
+
+| 模式 | 说明 |
+|------|------|
+| 字面量（不敏感） | 默认模式，大小写不敏感匹配 |
+| 字面量（敏感） | 大小写敏感精确匹配 |
+| 正则表达式 | JavaScript RegExp 语法 |
+| 全词匹配 | `\b` 边界匹配 |
+
+### 搜索高亮穿透链路
+
+```
+ChatView → MessageItem → MessageBlockList → MessageContentRenderer
+  → MarkdownRenderer (searchHighlight)
+  → ToolUseRenderer (searchHighlight → 工具名/参数/diff/Raw)
+  → ToolResultRenderer (searchHighlight → 工具名/参数/结果内容)
+  → ThinkingBlock (searchHighlight → 思考内容)
+```
+
+### 自动展开机制
+
+搜索导航跳转到折叠内容时：
+
+1. **消息级折叠**（compact_summary、system）：`searchAutoExpandId` 触发 useCollapsible 展开，400ms 后滚动
+2. **块级折叠**（thinking、tool_use、tool_result）：`searchAutoExpand` prop 穿透到子组件，300ms 后滚动
+3. **Raw 面板**（非 Write/Edit 工具）：`searchAutoExpand && !diffData` 时自动展开 Raw JSON 面板
+
+### 闪烁动画
+
+导航跳转时目标消息闪烁 3 次高亮：
+- 使用 CSS `@keyframes` 动画，脱离 React 渲染周期
+- 通过直接 DOM 操作添加/移除 CSS 类
+- `animationend` 事件清理，阻止子元素事件冒泡
+
+---
+
+## 性能优化要点
+
+### React.memo 三层防护
+
+| 组件 | 比较策略 | 效果 |
+|------|---------|------|
+| `MessageBlockList` | 默认浅比较 | content/toolUseMap 引用不变时跳过 |
+| `MessageContentRenderer` | 默认浅比较 | 单个内容块级别跳过 |
+| `MessageItem` | 自定义比较器 | 搜索导航时仅 0~2 条消息重渲染 |
+
+### MessageItem 自定义比较器
+
+将 `Set.has()` 和 `=== id` 判断提前到 `.map()` 调用处，传入 boolean 而非 Set/id：
+
+```typescript
+// 在 .map() 中预计算
+searchAutoExpand={searchAutoExpandId === msg.displayId}  // boolean
+isSelected={selectedMessages.has(msg.sourceUuid)}         // boolean
+isEditing={editingId === msg.displayId}                   // boolean
+```
+
+比较器只比较数据 props，忽略函数 props（函数引用可能不稳定但行为不变）。

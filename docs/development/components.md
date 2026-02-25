@@ -1,6 +1,6 @@
 # 组件文档
 
-本文档详细记录 ClaudeCodeReader (CCR) 前端的 7 个 React 组件，包括每个组件的概述、Props 接口、内部状态、功能特性、关键逻辑和渲染结构。
+本文档详细记录 ClaudeCodeReader (CCR) 前端的 12 个 React 组件，包括每个组件的概述、Props 接口、内部状态、功能特性、关键逻辑和渲染结构。
 
 ---
 
@@ -13,6 +13,11 @@
 5. [EnvSwitcher — 环境切换器](#5-envswitcher--环境切换器)
 6. [MessageBlockList — 消息内容块列表](#6-messageblocklist--消息内容块列表)
 7. [MessageContentRenderer — 消息内容块渲染器](#7-messagecontentrenderer--消息内容块渲染器)
+8. [ToolUseRenderer — 工具调用渲染器](#8-tooluserenderer--工具调用渲染器)
+9. [ToolResultRenderer — 工具结果渲染器](#9-toolresultrenderer--工具结果渲染器)
+10. [HighlightedText — 搜索高亮文本](#10-highlightedtext--搜索高亮文本)
+11. [MarkdownRenderer — Markdown 渲染器](#11-markdownrenderer--markdown-渲染器)
+12. [NavSearchBar — 导航搜索栏](#12-navsearchbar--导航搜索栏)
 
 ---
 
@@ -625,38 +630,35 @@ EnvSwitcher (relative 定位容器)
 
 ### 组件概述
 
-MessageBlockList 是消息内容渲染的入口组件，负责将 `SessionMessage` 的 `content` 字段转换为可视化的内容块列表。根据 content 的数据格式（字符串 vs 数组）选择不同的渲染策略，替代原有的 `getMessageText()` + `<pre>` 方案。
+MessageBlockList 是消息内容渲染的入口组件，接收 Rust 后端预处理的 `content: MessageContent[]` 数组和 `toolUseMap`，遍历渲染每个内容块。使用 `React.memo` 包裹，props 不变时跳过整个子树的重渲染。
 
 ### Props 接口
 
 ```tsx
 interface MessageBlockListProps {
-  message: SessionMessage;
+  content: MessageContent[];
+  projectPath: string;
+  toolUseMap: Record<string, ToolUseInfo>;
+  searchHighlight?: SearchHighlight;
+  searchAutoExpand?: boolean;
 }
 ```
 
 | 属性 | 类型 | 说明 |
 |------|------|------|
-| `message` | `SessionMessage` | 要渲染内容的会话消息对象 |
-
-### 渲染逻辑
-
-| 情况 | 渲染方式 |
-|------|---------|
-| `message.message` 不存在 | `[无消息内容]` 提示 |
-| `content` 为 `string` | `<pre>` 预格式化文本（`whitespace-pre-wrap break-words`） |
-| `content` 为 `MessageContent[]` | 遍历数组，每个元素渲染一个 `MessageContentRenderer` |
-| 未知格式 | `[未知内容格式]` 提示 |
+| `content` | `MessageContent[]` | Rust 后端提取的内容块数组 |
+| `projectPath` | `string` | 项目根目录路径，用于路径简化 |
+| `toolUseMap` | `Record<string, ToolUseInfo>` | tool_use_id → ToolUseInfo 映射 |
+| `searchHighlight` | `SearchHighlight \| undefined` | 搜索高亮选项，穿透到所有子组件 |
+| `searchAutoExpand` | `boolean \| undefined` | 搜索导航自动展开信号 |
 
 ### 渲染结构
 
 ```
-MessageBlockList
-├── [无 message] → "[无消息内容]" (italic, muted)
-├── [string content] → <pre> 预格式化文本
-├── [array content] → <div className="space-y-3">
-│   └── MessageContentRenderer × N (key=index)
-└── [其他] → "[未知内容格式]" (italic, muted)
+MessageBlockList (React.memo)
+├── [空数组] → "[无消息内容]" (italic, muted)
+└── <div className="space-y-3">
+    └── MessageContentRenderer × N (key=index)
 ```
 
 ---
@@ -667,45 +669,56 @@ MessageBlockList
 
 ### 组件概述
 
-MessageContentRenderer 负责根据 `MessageContent` 的 `type` 字段分类渲染不同类型的内容块。每种类型使用独立的视觉样式（颜色、边框、图标）便于区分。使用 motion/react 为各内容块添加进入动画，使用 lucide-react 图标（Wrench、CheckCircle2、XCircle、Lightbulb）替代 emoji。
+MessageContentRenderer 负责根据 `MessageContent` 的 `type` 字段分类渲染不同类型的内容块。使用 `React.memo` 包裹。内部包含 `ThinkingBlock` 子组件，使用 `useCollapsible` hook 实现受控折叠。
 
 ### Props 接口
 
 ```tsx
 interface MessageContentRendererProps {
   block: MessageContent;
+  projectPath: string;
+  toolUseMap: Record<string, ToolUseInfo>;
+  searchHighlight?: SearchHighlight;
+  searchAutoExpand?: boolean;
 }
 ```
 
 | 属性 | 类型 | 说明 |
 |------|------|------|
 | `block` | `MessageContent` | 要渲染的单个消息内容块 |
+| `projectPath` | `string` | 项目根目录路径 |
+| `toolUseMap` | `Record<string, ToolUseInfo>` | tool_use_id → ToolUseInfo 映射 |
+| `searchHighlight` | `SearchHighlight \| undefined` | 搜索高亮选项 |
+| `searchAutoExpand` | `boolean \| undefined` | 搜索导航自动展开信号 |
 
 ### 渲染逻辑（按 type 分类）
 
-| type | 视觉样式 | 动画 | 说明 |
-|------|---------|------|------|
-| `text` | `<pre>` 预格式化文本，font-sans | 淡入 + 上移 | 保留空白符并自动换行 |
-| `tool_use` | 蓝色左边框可折叠面板（`<details>`），`tool-use-block` CSS 类 | 缩放淡入 | 显示 Wrench 图标 + 工具名称 + JSON 参数 |
-| `tool_result` | 绿色左边框（错误时红色），`tool-result-block` CSS 类 | 左滑淡入 | CheckCircle2/XCircle 图标，支持嵌套内容递归渲染 |
-| `thinking` | 紫色虚线左边框可折叠面板，`thinking-block` CSS 类 | 缩放淡入 | Lightbulb 图标，默认折叠，斜体淡色显示 |
-| `image` | 圆角阴影内联图片 | 缩放淡入 | Base64 data URI，`loading="lazy"` |
-| 未知类型 | `<pre>` 提示文字 | 无 | 显示 `[type] 不支持的内容类型` |
+| type | 渲染方式 | 说明 |
+|------|---------|------|
+| `text` | `MarkdownRenderer` | Markdown 渲染，支持搜索高亮 |
+| `tool_use` | `ToolUseRenderer` | 紧凑格式 + diff + Raw，支持搜索高亮和自动展开 |
+| `tool_result` | `ToolResultRenderer` | 折叠式结果 + 打开文件位置，支持搜索高亮和自动展开 |
+| `thinking` | `ThinkingBlock`（内部组件） | 受控折叠，使用 useCollapsible，支持搜索导航自动展开 |
+| `image` | Base64 data URI 内联图片 | `loading="lazy"` |
+| 未知类型 | `<pre>` 提示 | 降级显示 |
 
-### 递归渲染
+### ThinkingBlock 内部组件
 
-`tool_result` 类型的 `content` 字段可以是嵌套的 `MessageContent[]` 数组，此时会递归调用 `MessageContentRenderer` 渲染每个嵌套块。
+使用 `useCollapsible(searchAutoExpand)` 替代原来的 HTML `<details>` 标签：
 
-### CSS 类说明
-
-以下 CSS 类定义在 `src/index.css` 中，每个类均设置了 `overflow: hidden` 防止内容撑开容器：
-
-- `.tool-use-block`：蓝色左边框，浅蓝色背景
-- `.tool-result-block`：绿色左边框，浅绿色背景
-- `.tool-result-error`：红色左边框，浅红色背景
-- `.thinking-block`：紫色虚线左边框
-- `.content-block`：通用内容块基础样式（padding、圆角）
-- `.code-block`：代码展示块样式
+```tsx
+function ThinkingBlock({ content, searchHighlight, searchAutoExpand }) {
+  const { expanded, handleManualToggle } = useCollapsible(searchAutoExpand);
+  return (
+    <div className="thinking-block content-block">
+      <button onClick={handleManualToggle}>
+        {expanded ? <ChevronDown /> : <ChevronRight />}
+        <Lightbulb /> 思考过程
+      </button>
+      {expanded && <MarkdownRenderer content={content} searchHighlight={searchHighlight} />}
+    </div>
+  );
+}
 
 ---
 
@@ -733,3 +746,164 @@ App (16 个状态变量, 18 个 useCallback)
 ```
 
 所有组件均为函数组件，业务数据和持久化逻辑完全由 App 组件通过 Props 和回调函数控制。子组件仅包含 UI 相关的本地状态（如搜索词、展开状态、编辑模式、下拉菜单可见性等）。
+
+---
+
+## 8. ToolUseRenderer — 工具调用渲染器
+
+**文件路径：** `src/components/ToolUseRenderer.tsx`
+
+### 组件概述
+
+ToolUseRenderer 将 `tool_use` 内容块渲染为紧凑的 `Tool(args)` 格式。Write/Edit 工具额外展示 diff 风格的内容预览（绿色新增、红色删除）。超过 5 行自动折叠。"Raw" 按钮切换查看原始 JSON 参数。支持搜索高亮和搜索导航自动展开。
+
+### Props 接口
+
+| 属性 | 类型 | 说明 |
+|------|------|------|
+| `block` | `MessageContent` | tool_use 内容块 |
+| `projectPath` | `string` | 项目根目录路径，用于路径简化 |
+| `searchAutoExpand` | `boolean \| undefined` | 搜索导航自动展开信号 |
+| `searchHighlight` | `SearchHighlight \| undefined` | 搜索高亮选项 |
+
+### 功能特性
+
+- **紧凑显示**：`🔧 Tool(args) [Raw]` 一行格式
+- **Diff 预览**（Write/Edit）：绿色（+）新增行、红色（-）删除行
+- **自动折叠**：diff 超过 5 行时默认折叠，可展开查看全部
+- **Raw JSON 面板**：切换查看原始参数 JSON
+- **搜索高亮**：工具名称、参数、diff 行、Raw JSON 均支持高亮
+- **自动展开**：
+  - diff 折叠：通过 `useCollapsible(searchAutoExpand)` 控制
+  - Raw 面板：非 Write/Edit 工具搜索导航时自动展开（`searchAutoExpand && !diffData`）
+
+### 关键内部组件
+
+- `DiffLines`：渲染红色删除行 + 绿色新增行，支持搜索高亮
+- `extractDiffData()`：从 Write/Edit 工具 input 中提取 diff 数据
+- `truncateDiff()`：截断 diff 到指定行数限制
+
+---
+
+## 9. ToolResultRenderer — 工具结果渲染器
+
+**文件路径：** `src/components/ToolResultRenderer.tsx`
+
+### 组件概述
+
+ToolResultRenderer 渲染 `tool_result` 内容块，显示工具执行结果。默认折叠，可展开查看完整内容。支持"打开文件位置"按钮（通过 toolUseMap 获取关联文件路径）。错误结果使用红色样式。
+
+### Props 接口
+
+| 属性 | 类型 | 说明 |
+|------|------|------|
+| `block` | `MessageContent` | tool_result 内容块 |
+| `toolUseMap` | `Record<string, ToolUseInfo>` | tool_use_id → ToolUseInfo 映射 |
+| `projectPath` | `string` | 项目根目录路径 |
+| `isError` | `boolean \| undefined` | 是否为错误结果 |
+| `searchHighlight` | `SearchHighlight \| undefined` | 搜索高亮选项 |
+| `searchAutoExpand` | `boolean \| undefined` | 搜索导航自动展开信号 |
+
+### 功能特性
+
+- **折叠式显示**：默认折叠，显示工具名称和参数摘要
+- **打开文件位置**：通过 toolUseMap 获取关联文件路径，点击在文件管理器中定位
+- **错误高亮**：`isError` 为 true 时使用红色边框和背景
+- **搜索高亮**：工具名称、参数、结果内容均支持高亮
+- **自动展开**：通过 `useCollapsible(searchAutoExpand)` 控制
+
+---
+
+## 10. HighlightedText — 搜索高亮文本
+
+**文件路径：** `src/components/HighlightedText.tsx`
+
+### 组件概述
+
+HighlightedText 是搜索高亮的共享组件，将文本中匹配搜索关键词的片段包裹在 `<mark className="search-highlight">` 中高亮显示。
+
+### Props 接口
+
+| 属性 | 类型 | 说明 |
+|------|------|------|
+| `text` | `string` | 要渲染的原始文本 |
+| `highlight` | `SearchHighlight` | 搜索高亮选项 |
+
+### 支持的匹配模式
+
+| 模式 | 说明 |
+|------|------|
+| 字面量 + 大小写不敏感 | `indexOf` 在小写化文本上循环（默认） |
+| 字面量 + 大小写敏感 | `indexOf` 在原始文本上精确匹配 |
+| 正则表达式 | `RegExp.exec` 循环，无效正则降级为原始文本 |
+
+### 使用组件
+
+- ToolUseRenderer（工具名称、参数、diff 行、Raw JSON）
+- ToolResultRenderer（工具名称、参数、结果内容）
+
+---
+
+## 11. MarkdownRenderer — Markdown 渲染器
+
+**文件路径：** `src/components/MarkdownRenderer.tsx`
+
+### 组件概述
+
+MarkdownRenderer 基于 `react-markdown` + `remark-gfm` 渲染 Markdown 内容，使用自定义 `rehypeHighlight` 插件实现 190+ 编程语言的语法高亮。
+
+### Props 接口
+
+| 属性 | 类型 | 说明 |
+|------|------|------|
+| `content` | `string` | Markdown 文本内容 |
+| `searchHighlight` | `SearchHighlight \| undefined` | 搜索高亮选项 |
+
+### 功能特性
+
+- **GFM 支持**：表格、任务列表、删除线等 GitHub Flavored Markdown 语法
+- **语法高亮**：自定义 rehype 插件，支持 190+ 编程语言
+- **代码块**：带行号显示，支持语言标识
+- **搜索高亮**：文本内容中匹配的搜索词高亮显示
+
+---
+
+## 12. NavSearchBar — 导航搜索栏
+
+**文件路径：** 内嵌于 `src/components/ChatView.tsx`
+
+### 组件概述
+
+NavSearchBar 是 VSCode 风格的搜索导航栏，通过 Ctrl+F 唤起。支持 4 种搜索模式，提供上/下导航按钮在匹配结果间跳转。
+
+### 功能特性
+
+- **4 种搜索模式**：字面量（不敏感）、字面量（敏感）、正则表达式、全词匹配
+- **导航**：Enter/Shift+Enter 或上下箭头在匹配结果间跳转
+- **匹配计数**：显示当前位置和总匹配数（如 "3/15"）
+- **自动聚焦**：打开时自动聚焦搜索输入框
+- **Escape 关闭**：按 Escape 关闭搜索栏
+
+---
+
+## 组件依赖关系总览
+
+```
+App (根组件)
+├── Sidebar
+│   └── EnvSwitcher
+├── ChatView
+│   ├── NavSearchBar (内嵌)
+│   └── MessageItem (React.memo + 自定义比较器)
+│       └── MessageBlockList (React.memo)
+│           └── MessageContentRenderer (React.memo)
+│               ├── MarkdownRenderer
+│               ├── ThinkingBlock (内部组件)
+│               │   └── MarkdownRenderer
+│               ├── ToolUseRenderer
+│               │   ├── DiffLines
+│               │   └── HighlightedText
+│               └── ToolResultRenderer
+│                   └── HighlightedText
+└── SettingsPanel (条件渲染)
+```

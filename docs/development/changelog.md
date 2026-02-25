@@ -4,6 +4,124 @@
 
 ---
 
+## [未发布] — 2025（基于 v1.3.0-beta.1）
+
+以下变更尚未发布为正式版本，基于 v1.3.0-beta.1 持续开发。
+
+### 新增
+
+#### Rust 后端全量计算迁移（架构重构）
+
+- **MVC 架构**：Rust 后端从"零自定义 Command"重构为完整的 MVC 分层架构
+  - `commands/` — Tauri IPC 命令层（projects、messages、settings 三个子模块）
+  - `models/` — 数据模型层（project、message、display、settings 四个子模块）
+  - `services/` — 业务逻辑层（scanner、parser、classifier、transformer、cache、export 六个子模块）
+  - `utils/` — 工具函数层（path 路径处理）
+- **15 个自定义 Tauri Commands**：
+  - 设置：`get_claude_data_path`、`read_settings`、`save_settings`、`read_env_config`、`save_env_config`、`read_history`、`check_file_exists`
+  - 项目：`scan_projects`
+  - 消息：`read_session_messages`、`delete_message`、`delete_messages`、`edit_message_content`、`delete_session`、`search_session`、`export_session`
+- **AppCache 全局状态**：LRU 缓存（最多 20 个会话）+ 项目列表 TTL 缓存（30 秒）
+- **新增 Rust 依赖**：`tokio`（异步 I/O）、`dirs`（主目录获取）、`regex`（正则匹配）、`rayon`（数据并行）、`memchr`（SIMD 子串搜索）、`tauri-plugin-opener`（文件管理器集成）
+- **Rust edition 升级**：从 2021 升级到 2024，rust-version 从 1.77.2 升级到 1.85
+
+#### 消息处理管线
+
+- **消息分类器**（classifier.rs）：将原始 SessionMessage 精确分类为 user/assistant/system/compact_summary 等类型，识别系统消息子类型（skill、plan、plan_execution 等）
+- **消息转换器**（transformer.rs）：将原始消息转换为前端可渲染的 DisplayMessage，构建 toolUseMap，计算 TokenStats
+- **JSONL 解析器**（parser.rs）：高性能 JSONL 解析，支持容错（跳过无效行）
+- **项目扫描器**（scanner.rs）：并行 I/O 扫描项目和会话，支持路径编解码
+- **会话导出**（export.rs）：Markdown/JSON 格式导出
+
+#### VSCode 风格导航搜索系统
+
+- **NavSearchBar 组件**：Ctrl+F 唤起的搜索栏，支持 4 种搜索模式
+  - 字面量（大小写不敏感，默认）
+  - 字面量（大小写敏感）
+  - 正则表达式
+  - 全词匹配
+- **搜索结果导航**：Enter/Shift+Enter 或上下箭头在匹配结果间跳转
+- **闪烁动画**：导航跳转时目标消息闪烁 3 次高亮（CSS @keyframes，脱离 React 渲染周期）
+- **搜索高亮**：匹配文本在消息内容、工具参数、diff 内容、Raw JSON 中均高亮显示
+- **自动展开**：搜索跳转到折叠内容时自动展开（thinking、tool_use、tool_result、compact_summary、system）
+- **性能优化**：searchAutoExpandId 从 useMemo 派生，MessageItem React.memo 自定义比较器，仅 0~2 条消息重渲染
+
+#### 搜索高亮系统
+
+- **HighlightedText 共享组件**：支持 3 种匹配模式（字面量大小写敏感/不敏感、正则表达式）
+- **SearchHighlight 类型**：`{ query, caseSensitive, useRegex }` 穿透到所有渲染组件
+- **工具块高亮**：ToolUseRenderer 中工具名称、参数、diff 行、Raw JSON 均支持搜索高亮
+- **工具结果高亮**：ToolResultRenderer 中工具名称、参数、结果内容均支持搜索高亮
+
+#### 统一折叠系统
+
+- **useCollapsible hook**：提取为独立 hook（`src/hooks/useCollapsible.ts`），统一管理所有可折叠组件
+  - 支持搜索导航自动展开（searchAutoExpand 信号）
+  - 导航离开时自动收起（仅自动展开的，手动展开不受影响）
+  - 使用 `useEffect`（非渲染阶段状态派生）确保 React.memo 下行为可靠
+- **适用组件**：CompactSummaryBlock、SystemMessageBlock、ThinkingBlock、ToolUseRenderer（diff 折叠）、ToolResultRenderer
+- **Raw 面板自动展开**：非 Write/Edit 工具（如 AskUserQuestion）搜索导航时自动展开 Raw JSON 面板
+
+#### 视口驱动渐进式渲染
+
+- **useProgressiveRender hook**：基于 IntersectionObserver 的虚拟化渲染
+- 仅渲染视口内及附近的消息，视口外显示占位符
+- 300+ 消息会话首屏渲染时间从秒级降到毫秒级
+
+#### Markdown 渲染
+
+- **MarkdownRenderer 组件**：基于 react-markdown + remark-gfm
+- **rehypeHighlight 插件**：自定义 rehype 插件，支持 190+ 编程语言语法高亮
+- 代码块带行号显示
+
+#### 工具渲染增强
+
+- **ToolUseRenderer 组件**：紧凑 `Tool(args)` 格式 + Raw JSON 切换 + diff 预览
+  - Write 工具：绿色新增行
+  - Edit 工具：红色删除行 + 绿色新增行
+  - 超过 5 行自动折叠
+- **ToolResultRenderer 组件**：折叠式结果展示 + 打开文件位置按钮
+- **toolFormatter 工具**：格式化 15+ 种工具参数为紧凑显示（Read、Write、Edit、Bash、Glob、Grep、Task、LSP、AskUserQuestion、WebSearch、WebFetch、NotebookEdit、TodoWrite 等）
+
+#### 系统消息识别
+
+- **精确分类**：识别 skill、plan、plan_execution、compact_summary 等系统消息子类型
+- **计划执行消息**：支持会话跳转按钮，点击可导航到关联会话
+- **压缩摘要消息**：默认折叠，显示分割线"--已压缩--"
+
+### 修复
+
+- **编辑消息保存后不再跳到底部**：保存编辑后保持当前滚动位置
+- **进入会话不在底部及滚动条异常**：修复首次加载会话时的滚动定位
+- **计划消息标题匹配**：放宽为一级或二级标题均可匹配
+- **计划消息跳转按钮**：始终显示，不再条件隐藏
+- **搜索闪烁动画 CSS 冲突**：隔离闪烁动画 CSS，避免与其他动画冲突
+- **animationend 事件冒泡**：阻止子元素动画结束事件冒泡导致闪烁提前终止
+- **搜索导航闪烁丢失**：闪烁动画脱离 React 渲染周期，改用直接 DOM 操作
+- **搜索导航改用 instant 滚动**：确保闪烁动画在定位完成后播放
+- **搜索导航定位到匹配位置**：展开折叠内容后滚动到实际 `<mark>` 元素而非消息容器
+- **非 Write/Edit 工具搜索展开**：AskUserQuestion 等工具搜索导航时自动展开 Raw 面板
+
+### 性能优化
+
+- **全量计算迁移至 Rust 后端**：消息解析、分类、转换、Token 统计全部在 Rust 端完成
+- **React.memo 三层防护**：MessageBlockList、MessageContentRenderer、MessageItem 均使用 memo
+- **MessageItem 自定义比较器**：搜索导航时仅 0~2 条消息重渲染，其余 298+ 条跳过
+- **searchAutoExpandId 派生值**：从 useState 改为 useMemo，消除二次重渲染
+- **消除三大前端渲染瓶颈**：消息列表虚拟化、memo 优化、状态派生
+
+### 技术变更
+
+- Rust edition 从 2021 升级到 2024
+- Rust 后端从 2 个文件（main.rs + lib.rs）扩展为完整 MVC 架构（~3000 行）
+- 前端新增依赖：`react-markdown`、`remark-gfm`
+- 前端新增组件：NavSearchBar、ToolUseRenderer、ToolResultRenderer、HighlightedText、MarkdownRenderer
+- 前端新增 hooks：useCollapsible、useProgressiveRender
+- 前端新增 utils：toolFormatter、messageTransform、rehypeHighlight
+- 前端数据层从直接调用 Tauri 插件改为调用 Rust 自定义 Commands（通过 `invoke()`）
+
+---
+
 ## [1.3.0-beta.1] — 2025
 
 ### 新增
