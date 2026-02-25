@@ -233,6 +233,19 @@ function App() {
   }, []);
 
   /**
+   * 侧边栏专用的会话选择回调
+   *
+   * 在 handleSelectSession 基础上额外清除导航回退目标（navBackTarget），
+   * 确保用户通过侧边栏切换会话时悬浮"返回"按钮消失。
+   * 与 handleNavigateToSession / handleNavigateBack 内部调用的 handleSelectSession 区分，
+   * 后者需要保留或自行管理 navBackTarget。
+   */
+  const handleSidebarSelectSession = useCallback(async (sess: Session) => {
+    setNavBackTarget(null);
+    await handleSelectSession(sess);
+  }, [handleSelectSession]);
+
+  /**
    * 刷新当前会话的消息列表
    *
    * 重新从文件系统读取当前会话的 JSONL 文件，更新消息列表。
@@ -434,6 +447,8 @@ function App() {
           setSession(null);
           setSelectedMessages(new Set());
           setSelectionMode(false);
+          // 删除当前会话时也清除导航回退目标，防止悬浮"返回"按钮残留
+          setNavBackTarget(null);
         }
         // 重新加载项目列表以刷新侧边栏
         const updatedProjects = await getProjects(claudeDataPath);
@@ -701,7 +716,7 @@ function App() {
             width={sidebarWidth}
             isResizing={isResizingSidebar}
             onSelectProject={setCurrentProject}
-            onSelectSession={handleSelectSession}
+            onSelectSession={handleSidebarSelectSession}
             onDeleteSession={handleDeleteSession}
             onOpenSettings={() => setShowSettings(true)}
             onSwitchEnvProfile={handleSwitchEnvProfile}
