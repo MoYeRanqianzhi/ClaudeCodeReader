@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Palette, Bot, Shield, Info, Eye, EyeOff, Plus, Trash2, Github, Sun, SunMoon, Moon, Wrench, CheckSquare, Square } from 'lucide-react';
-import type { ClaudeSettings, EnvProfile, ResumeConfig } from '../types/claude';
-import { readResumeConfig, saveResumeConfig } from '../utils/claudeData';
+import type { ClaudeSettings, EnvProfile, ResumeConfig, BackupConfig } from '../types/claude';
+import { readResumeConfig, saveResumeConfig, readBackupConfig, saveBackupConfig } from '../utils/claudeData';
 
 /**
  * 设置面板组件的属性接口
@@ -50,6 +50,8 @@ export function SettingsPanel({
   const [showApiKey, setShowApiKey] = useState(false);
   /** 一键 Resume 配置（独立于 Claude Code settings，存储在 CCR 配置目录） */
   const [resumeConfig, setResumeConfig] = useState<ResumeConfig>({ flags: [], customArgs: '' });
+  /** 备份配置（控制主动备份的启用状态） */
+  const [backupConfig, setBackupConfig] = useState<BackupConfig>({ autoBackupEnabled: false });
 
   /**
    * 可勾选的常用 Claude CLI flag 列表
@@ -82,6 +84,9 @@ export function SettingsPanel({
     readResumeConfig()
       .then(setResumeConfig)
       .catch((err) => console.error('加载 Resume 配置失败:', err));
+    readBackupConfig()
+      .then(setBackupConfig)
+      .catch((err) => console.error('加载备份配置失败:', err));
   }, []);
 
   /**
@@ -446,6 +451,42 @@ export function SettingsPanel({
                       最终命令：claude --resume &lt;会话ID&gt; {resumeConfig.flags.join(' ')} {resumeConfig.customArgs}
                     </p>
                   </div>
+                </div>
+
+                {/* 分隔线 */}
+                <div className="border-t border-border" />
+
+                {/* 备份设置区域 */}
+                <div>
+                  <label className="block text-sm font-medium text-foreground mb-1">备份设置</label>
+                  <p className="text-xs text-muted-foreground mb-3">
+                    所有修改操作前会自动在系统临时目录创建备份（应用运行期间有效）。
+                    启用"自动备份"后，还会在原文件同目录创建 .ccbak 备份文件。
+                  </p>
+
+                  {/* 自动备份开关 */}
+                  <button
+                    onClick={() => {
+                      const newConfig = { ...backupConfig, autoBackupEnabled: !backupConfig.autoBackupEnabled };
+                      setBackupConfig(newConfig);
+                      saveBackupConfig(newConfig).catch(err =>
+                        console.error('保存备份配置失败:', err)
+                      );
+                    }}
+                    className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-accent/50 transition-colors text-left"
+                  >
+                    {backupConfig.autoBackupEnabled ? (
+                      <CheckSquare className="w-4 h-4 text-primary shrink-0" />
+                    ) : (
+                      <Square className="w-4 h-4 text-muted-foreground shrink-0" />
+                    )}
+                    <div className="min-w-0">
+                      <span className="text-sm text-foreground">启用自动备份</span>
+                      <p className="text-xs text-muted-foreground">
+                        修改前在原文件同目录创建 .ccbak 备份（如 会话ID.jsonl.ccbak20260225143000）
+                      </p>
+                    </div>
+                  </button>
                 </div>
               </motion.div>
             )}

@@ -12,8 +12,12 @@
 
 use std::path::Path;
 
+use tauri::State;
+
 use crate::models::message::HistoryEntry;
 use crate::models::settings::{ClaudeSettings, EnvSwitcherConfig};
+use crate::services::cache::AppCache;
+use crate::services::file_guard;
 use crate::utils::path;
 
 /// 获取 Claude Code 数据目录的绝对路径
@@ -63,19 +67,21 @@ pub async fn read_settings(claude_path: String) -> Result<ClaudeSettings, String
 
 /// 保存 Claude Code 设置文件
 ///
-/// 将设置对象序列化为 JSON（带 2 空格缩进）并写入 `~/.claude/settings.json`。
-/// 此操作会覆盖整个文件内容。
+/// 将设置对象序列化为 JSON（带 2 空格缩进）并通过 `file_guard` 安全写入
+/// `~/.claude/settings.json`。写入前自动进行路径验证和双重备份。
 ///
 /// # 参数
 /// - `claude_path` - Claude 数据目录路径（`~/.claude/`）
 /// - `settings` - 要保存的完整设置对象
+/// - `cache` - Tauri managed state，用于 file_guard 注册临时备份
 ///
 /// # 错误
-/// 文件写入失败时返回错误
+/// 序列化失败、路径验证失败、备份失败或文件写入失败时返回错误
 #[tauri::command]
 pub async fn save_settings(
     claude_path: String,
     settings: ClaudeSettings,
+    cache: State<'_, AppCache>,
 ) -> Result<(), String> {
     let settings_path = Path::new(&claude_path).join("settings.json");
 
@@ -83,9 +89,14 @@ pub async fn save_settings(
     let content = serde_json::to_string_pretty(&settings)
         .map_err(|e| format!("序列化设置失败: {}", e))?;
 
-    tokio::fs::write(&settings_path, content)
-        .await
-        .map_err(|e| format!("写入设置文件失败: {}", e))
+    // 通过 file_guard 安全写入（含路径验证 + 双重备份）
+    file_guard::safe_write_file(
+        &settings_path.to_string_lossy(),
+        content.as_bytes(),
+        "save_settings",
+        &cache,
+    )
+    .await
 }
 
 /// 读取环境切换器配置

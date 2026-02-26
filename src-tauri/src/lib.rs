@@ -87,6 +87,9 @@ pub fn run() {
             commands::tools::read_resume_config,
             commands::tools::save_resume_config,
             commands::tools::open_resume_terminal,
+            commands::tools::read_backup_config,
+            commands::tools::save_backup_config,
+            commands::tools::get_temp_backups,
         ])
         // `setup` 闭包：在应用窗口创建之前执行的初始化钩子
         .setup(|app| {

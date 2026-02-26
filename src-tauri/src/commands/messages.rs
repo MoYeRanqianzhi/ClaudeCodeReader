@@ -25,7 +25,7 @@ use tauri::State;
 
 use crate::models::display::TransformedSession;
 use crate::services::cache::AppCache;
-use crate::services::{export, parser, transformer};
+use crate::services::{export, file_guard, parser, transformer};
 
 /// 读取指定会话的所有消息并返回转换后的 TransformedSession
 ///
@@ -98,8 +98,8 @@ pub async fn delete_message(
         })
         .collect();
 
-    // 写回文件
-    parser::write_messages(&session_file_path, &filtered).await?;
+    // 写回文件（通过 file_guard 安全写入）
+    parser::write_messages(&session_file_path, &filtered, "delete_message", &cache).await?;
 
     // 重新 transform 并更新缓存
     let (transformed, search_texts, original_texts) = transformer::transform_session(&filtered);
@@ -148,7 +148,7 @@ pub async fn delete_messages(
         })
         .collect();
 
-    parser::write_messages(&session_file_path, &filtered).await?;
+    parser::write_messages(&session_file_path, &filtered, "delete_messages", &cache).await?;
 
     // 重新 transform 并更新缓存
     let (transformed, search_texts, original_texts) = transformer::transform_session(&filtered);
@@ -300,8 +300,8 @@ pub async fn edit_message_content(
         })
         .collect();
 
-    // 写回文件
-    parser::write_messages(&session_file_path, &updated).await?;
+    // 写回文件（通过 file_guard 安全写入）
+    parser::write_messages(&session_file_path, &updated, "edit_message", &cache).await?;
 
     // 重新 transform 并更新缓存
     let (transformed, search_texts, original_texts) = transformer::transform_session(&updated);
@@ -312,23 +312,23 @@ pub async fn edit_message_content(
 
 /// 删除指定的会话文件
 ///
-/// 从文件系统中永久移除会话的 JSONL 文件。此操作不可撤销。
-/// 同时清除该会话的缓存和项目列表缓存。
+/// 从文件系统中永久移除会话的 JSONL 文件。
+/// 删除前通过 `file_guard` 自动创建临时备份（强制）和主动备份（可选），
+/// 确保用户在应用关闭前可以反悔恢复。
 ///
 /// # 参数
 /// - `session_file_path` - 要删除的会话 JSONL 文件的绝对路径
 /// - `cache` - Tauri managed state，内存缓存
 ///
 /// # 错误
-/// 文件删除失败时返回错误
+/// 路径验证失败、备份失败或文件删除失败时返回错误
 #[tauri::command]
 pub async fn delete_session(
     session_file_path: String,
     cache: State<'_, AppCache>,
 ) -> Result<(), String> {
-    tokio::fs::remove_file(&session_file_path)
-        .await
-        .map_err(|e| format!("删除会话文件失败: {}", e))?;
+    // 通过 file_guard 安全删除（含路径验证 + 双重备份）
+    file_guard::safe_delete_file(&session_file_path, "delete_session", &cache).await?;
 
     // 清除相关缓存
     cache.invalidate_session(&session_file_path);

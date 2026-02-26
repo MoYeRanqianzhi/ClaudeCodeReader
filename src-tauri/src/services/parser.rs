@@ -7,10 +7,16 @@
 //! - 使用 `tokio::fs::read` 一次性读取文件到字节缓冲区（避免中间 UTF-8 转换开销）
 //! - 使用 `serde_json::from_str` 逐行解析，比 JS 的 `JSON.parse` 快 3-10 倍
 //! - 解析失败的行静默跳过，与前端容错策略一致
+//!
+//! ## 写入安全
+//! `write_messages` 通过 `file_guard::safe_write_file` 执行写入，
+//! 自动进行路径验证和双重备份（临时备份 + 可选主动备份）。
 
 use std::path::Path;
 
 use crate::models::message::SessionMessage;
+use crate::services::cache::AppCache;
+use crate::services::file_guard;
 
 /// 读取并解析 JSONL 会话文件中的所有消息
 ///
@@ -49,20 +55,27 @@ pub async fn read_messages(file_path: &str) -> Result<Vec<SessionMessage>, Strin
     Ok(messages)
 }
 
-/// 将消息列表序列化为 JSONL 格式并写入文件
+/// 将消息列表序列化为 JSONL 格式并安全写入文件
 ///
 /// 每条消息序列化为单行 JSON，行之间用换行符分隔，末尾加换行符。
-/// 此操作会覆盖整个文件内容。
+/// 通过 `file_guard::safe_write_file` 执行写入，自动进行：
+/// - 路径安全验证（确保在 `~/.claude/` 下）
+/// - 临时备份（强制，写入 TEMP 目录）
+/// - 主动备份（可选，写入同目录 `.ccbak` 文件）
 ///
 /// # 参数
 /// - `file_path` - 会话 JSONL 文件的绝对路径
 /// - `messages` - 要写入的完整消息列表
+/// - `operation` - 操作描述（用于备份记录，如 "delete_message"）
+/// - `cache` - AppCache 引用，用于注册临时备份记录
 ///
 /// # 错误
-/// 序列化失败或文件写入失败时返回错误
+/// 序列化失败、路径验证失败、备份失败或文件写入失败时返回错误
 pub async fn write_messages(
     file_path: &str,
     messages: &[SessionMessage],
+    operation: &str,
+    cache: &AppCache,
 ) -> Result<(), String> {
     // 预分配足够的缓冲区容量，减少重新分配次数
     let mut content = String::with_capacity(messages.len() * 256);
@@ -74,7 +87,6 @@ pub async fn write_messages(
         content.push('\n');
     }
 
-    tokio::fs::write(file_path, content)
-        .await
-        .map_err(|e| format!("写入会话文件失败: {}", e))
+    // 通过 file_guard 安全写入（含路径验证 + 双重备份）
+    file_guard::safe_write_file(file_path, content.as_bytes(), operation, cache).await
 }

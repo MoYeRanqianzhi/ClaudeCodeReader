@@ -46,7 +46,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core';
-import type { ClaudeSettings, Project, SessionMessage, HistoryEntry, EnvSwitcherConfig, EnvProfile, TransformedSession, ResumeConfig } from '../types/claude';
+import type { ClaudeSettings, Project, HistoryEntry, EnvSwitcherConfig, EnvProfile, TransformedSession, ResumeConfig, BackupConfig } from '../types/claude';
 
 // ============ 路径工具函数 ============
 
@@ -262,25 +262,6 @@ export async function readSessionMessages(sessionFilePath: string): Promise<Tran
 }
 
 /**
- * 将消息列表保存到会话文件
- *
- * 注意：此函数通过重新读取和写入完整消息列表实现。
- * 对于消息的编辑和删除操作，建议使用专用的 editMessageContent / deleteMessage 等函数，
- * 它们在 Rust 后端一次操作内完成读取、修改、写入，避免了额外的 IPC 往返。
- *
- * 此函数保留是为了向后兼容，但新的代码应尽量使用 Rust 后端的专用 commands。
- *
- * @param sessionFilePath - 会话 JSONL 文件的绝对路径
- * @param messages - 要保存的完整消息列表
- */
-export async function saveSessionMessages(sessionFilePath: string, messages: SessionMessage[]): Promise<void> {
-  const { writeTextFile } = await import('@tauri-apps/plugin-fs');
-  // 每条消息序列化为单行 JSON，行之间用换行符分隔，末尾加换行符
-  const content = messages.map(msg => JSON.stringify(msg)).join('\n') + '\n';
-  await writeTextFile(sessionFilePath, content);
-}
-
-/**
  * 删除指定的单条消息
  *
  * 通过 Rust 后端在单次 IPC 调用中完成：读取文件 → 过滤消息 → 写入文件 → 重新 transform。
@@ -475,6 +456,31 @@ export async function saveResumeConfig(config: ResumeConfig): Promise<void> {
  */
 export async function openResumeTerminal(projectPath: string, sessionId: string): Promise<void> {
   return invoke<void>('open_resume_terminal', { projectPath, sessionId });
+}
+
+// ============ 备份配置 ============
+
+/**
+ * 读取备份配置
+ *
+ * 从 `~/.mo/CCR/backup-config.json` 加载备份设置。
+ * 配置文件不存在时返回默认配置（主动备份关闭）。
+ *
+ * @returns BackupConfig 对象
+ */
+export async function readBackupConfig(): Promise<BackupConfig> {
+  return invoke<BackupConfig>('read_backup_config');
+}
+
+/**
+ * 保存备份配置
+ *
+ * 将 BackupConfig 序列化为 JSON 并写入 `~/.mo/CCR/backup-config.json`。
+ *
+ * @param config - 要保存的 BackupConfig 对象
+ */
+export async function saveBackupConfig(config: BackupConfig): Promise<void> {
+  return invoke<void>('save_backup_config', { config });
 }
 
 /**

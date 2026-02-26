@@ -580,3 +580,17 @@ export interface ResumeConfig {
   /** 用户自定义的额外参数字符串（追加在命令末尾） */
   customArgs: string;
 }
+
+/**
+ * 备份配置接口
+ *
+ * 控制主动备份（.ccbak）的启用状态。
+ * 临时备份始终启用，不受此配置影响。
+ * 配置文件路径：`~/.mo/CCR/backup-config.json`
+ *
+ * 对应 Rust 后端 `services::file_guard::BackupConfig` 结构体。
+ */
+export interface BackupConfig {
+  /** 是否启用主动备份（在原文件同目录创建 .ccbak 文件） */
+  autoBackupEnabled: boolean;
+}

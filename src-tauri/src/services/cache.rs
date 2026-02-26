@@ -33,6 +33,7 @@ use rayon::prelude::*;
 
 use crate::models::display::TransformedSession;
 use crate::models::project::Project;
+use crate::services::file_guard::TempBackupEntry;
 
 /// 项目列表缓存的默认有效期（秒）
 ///
@@ -68,6 +69,10 @@ pub struct AppCache {
     /// 会话缓存：以文件路径为 key，缓存转换后的 TransformedSession 和搜索文本
     /// 每个缓存条目记录了文件的 mtime，用于检测文件是否被外部修改
     sessions: RwLock<SessionCache>,
+
+    /// 临时备份注册表：记录本次应用运行期间所有临时备份的映射关系
+    /// 应用关闭后注册表清空，但 TEMP 目录下的备份文件仍由 OS 管理
+    temp_backups: RwLock<Vec<TempBackupEntry>>,
 }
 
 /// 项目列表缓存条目
@@ -112,6 +117,7 @@ impl AppCache {
             sessions: RwLock::new(SessionCache {
                 entries: HashMap::new(),
             }),
+            temp_backups: RwLock::new(Vec::new()),
         }
     }
 
@@ -383,6 +389,27 @@ impl AppCache {
 
             Ok(Some(results))
         }
+    }
+
+    // ======== 临时备份注册表方法 ========
+
+    /// 注册一条临时备份记录
+    ///
+    /// 由 `file_guard` 在创建临时备份后调用。
+    pub fn register_temp_backup(&self, entry: TempBackupEntry) {
+        if let Ok(mut backups) = self.temp_backups.write() {
+            backups.push(entry);
+        }
+    }
+
+    /// 获取所有临时备份记录（供前端展示）
+    ///
+    /// 返回本次应用运行期间所有临时备份的完整列表。
+    pub fn get_all_temp_backups(&self) -> Vec<TempBackupEntry> {
+        self.temp_backups
+            .read()
+            .map(|backups| backups.clone())
+            .unwrap_or_default()
     }
 }
 

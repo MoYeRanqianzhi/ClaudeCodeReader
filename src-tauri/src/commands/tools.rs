@@ -1,15 +1,19 @@
 //! # 实用工具 Tauri Commands
 //!
 //! 提供实用工具相关的 Tauri command 处理函数：
-//! - `read_resume_config` - 读取一键 Resume 配置
-//! - `save_resume_config` - 保存一键 Resume 配置
+//! - `read_resume_config` / `save_resume_config` - 一键 Resume 配置读写
 //! - `open_resume_terminal` - 打开终端执行 claude --resume 命令
+//! - `read_backup_config` / `save_backup_config` - 备份配置读写
+//! - `get_temp_backups` - 获取本次运行期间的临时备份列表
 //!
-//! Resume 配置存储在 `~/.mo/CCR/resume-config.json`，
+//! 所有 CCR 配置存储在 `~/.mo/CCR/` 目录下，
 //! 与 Claude Code 的 `settings.json` 完全隔离。
 
 use serde::{Deserialize, Serialize};
+use tauri::State;
 
+use crate::services::cache::AppCache;
+use crate::services::file_guard::{self, BackupConfig, TempBackupEntry};
 use crate::utils::path;
 
 /// 一键 Resume 功能的配置数据结构
@@ -262,4 +266,56 @@ fn open_terminal_with_command(working_dir: &str, command: &str) -> Result<(), St
     }
 
     Ok(())
+}
+
+// ============ 备份配置 Commands ============
+
+/// 读取备份配置
+///
+/// 从 `~/.mo/CCR/backup-config.json` 加载备份设置。
+/// 配置文件不存在时返回默认配置（主动备份关闭）。
+///
+/// # 返回值
+/// 返回 BackupConfig 对象
+#[tauri::command]
+pub async fn read_backup_config() -> Result<BackupConfig, String> {
+    Ok(file_guard::read_backup_config_internal().await)
+}
+
+/// 保存备份配置
+///
+/// 将 BackupConfig 序列化为 JSON 并写入 `~/.mo/CCR/backup-config.json`。
+///
+/// # 参数
+/// - `config` - 要保存的 BackupConfig 对象
+#[tauri::command]
+pub async fn save_backup_config(config: BackupConfig) -> Result<(), String> {
+    let ccr_path = path::get_ccr_config_path()?;
+
+    // 确保 CCR 配置目录存在
+    if !ccr_path.exists() {
+        tokio::fs::create_dir_all(&ccr_path)
+            .await
+            .map_err(|e| format!("创建 CCR 配置目录失败: {}", e))?;
+    }
+
+    let config_path = ccr_path.join("backup-config.json");
+    let content = serde_json::to_string_pretty(&config)
+        .map_err(|e| format!("序列化备份配置失败: {}", e))?;
+
+    tokio::fs::write(&config_path, content)
+        .await
+        .map_err(|e| format!("写入备份配置文件失败: {}", e))
+}
+
+/// 获取本次运行期间的所有临时备份记录
+///
+/// 返回 AppCache 中注册的临时备份列表，供前端展示。
+/// 应用关闭后注册表清空，但 TEMP 目录下的备份文件仍由 OS 管理。
+///
+/// # 返回值
+/// 返回 TempBackupEntry 数组，按创建时间顺序排列
+#[tauri::command]
+pub async fn get_temp_backups(cache: State<'_, AppCache>) -> Result<Vec<TempBackupEntry>, String> {
+    Ok(cache.get_all_temp_backups())
 }
