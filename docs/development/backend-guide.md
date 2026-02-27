@@ -251,7 +251,7 @@ AppCache
 | 字段 | 值 | 说明 |
 |------|------|------|
 | `name` | `claude-code-reader` | Cargo 包名称 |
-| `version` | `2.1.0-beta.1` | 当前版本号 |
+| `version` | `2.1.0-rc.1` | 当前版本号 |
 | `edition` | `2024` | Rust 版本 (Edition) |
 | `rust-version` | `1.85` | 最低 Rust 工具链版本 |
 | `license` | `MIT` | 开源许可证 |
