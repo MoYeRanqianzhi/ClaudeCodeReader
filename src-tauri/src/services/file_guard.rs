@@ -155,7 +155,7 @@ pub async fn safe_delete_file(
 ///
 /// # 错误
 /// 路径不在 `~/.claude/` 下时返回安全检查失败错误
-fn validate_claude_path(file_path: &str) -> Result<(), String> {
+pub(crate) fn validate_claude_path(file_path: &str) -> Result<(), String> {
     let claude_path = path::get_claude_data_path()?;
 
     // canonicalize 解析符号链接和相对路径组件

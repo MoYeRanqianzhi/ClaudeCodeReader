@@ -90,6 +90,9 @@ pub fn run() {
             commands::tools::read_backup_config,
             commands::tools::save_backup_config,
             commands::tools::get_temp_backups,
+            // 一键修复 commands
+            commands::tools::list_fixers,
+            commands::tools::execute_fixer,
         ])
         // `setup` 闭包：在应用窗口创建之前执行的初始化钩子
         .setup(|app| {

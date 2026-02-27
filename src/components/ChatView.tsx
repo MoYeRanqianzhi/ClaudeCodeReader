@@ -29,6 +29,7 @@ import { MessageContentRenderer } from './MessageContentRenderer';
 import { useProgressiveRender } from '../hooks/useProgressiveRender';
 import { useCollapsible } from '../hooks/useCollapsible';
 import { NavSearchBar, type SearchRequest, type NavSearchBarHandle } from './NavSearchBar';
+import { QuickFixModal } from './QuickFixModal';
 
 /**
  * 可筛选的消息类型
@@ -806,6 +807,8 @@ export function ChatView({
   const [showExportDropdown, setShowExportDropdown] = useState(false);
   /** 控制实用工具下拉菜单的显示/隐藏状态 */
   const [showToolsDropdown, setShowToolsDropdown] = useState(false);
+  /** 控制一键修复弹窗的显示/隐藏状态 */
+  const [showQuickFix, setShowQuickFix] = useState(false);
 
   // ==================== VSCode 风格导航搜索状态 ====================
   /** 导航搜索栏是否打开 */
@@ -1424,6 +1427,17 @@ export function ChatView({
                     <Terminal className="w-4 h-4" />
                     <span>一键 Resume</span>
                   </button>
+                  {/* 一键修复：打开修复弹窗 */}
+                  <button
+                    onClick={() => {
+                      setShowToolsDropdown(false);
+                      setShowQuickFix(true);
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent/50 transition-colors"
+                  >
+                    <Wrench className="w-4 h-4" />
+                    <span>一键修复</span>
+                  </button>
                 </motion.div>
               )}
             </AnimatePresence>
@@ -1730,6 +1744,17 @@ export function ChatView({
               返回: {navBackTarget.session.name || navBackTarget.session.id.substring(0, 8)}
             </motion.button>
           </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* 一键修复弹窗 */}
+      <AnimatePresence>
+        {showQuickFix && session && (
+          <QuickFixModal
+            sessionFilePath={session.filePath}
+            onClose={() => setShowQuickFix(false)}
+            onSessionUpdate={onRefresh}
+          />
         )}
       </AnimatePresence>
     </div>

@@ -47,6 +47,19 @@ Download from [Releases](https://github.com/MoYeRanQianZhi/ClaudeCodeReader/rele
 - Manage environment variables
 - Switch between env profiles
 - Light/Dark theme
+- **Quick Fix** — One-click repair for common Claude Code session issues (e.g. expired thinking blocks causing 400 errors). Extensible framework with 4 permission levels.
+
+## Contributing Quick Fixes
+
+Claude Code sessions can run into various issues — expired signatures, corrupted formats, encoding errors, and more. We sincerely invite everyone to contribute fixes for problems you've encountered. Whether it's a bug you've discovered or a repair method you've figured out, your contribution helps the entire community.
+
+See the [Contributing Fixers Guide](docs/development/contributing-fixers.md) for full details.
+
+**To contribute a fixer using Claude Code, copy the following prompt to your AI Agent (e.g. Claude Code):**
+
+```
+Please git clone https://github.com/MoYeRanQianZhi/ClaudeCodeReader.git, then read docs/development/contributing-fixers.md thoroughly, make sure you fully understand the bug you want to fix and the repair approach, and contribute code following all requirements in that guide.
+```
 
 ## Build
 

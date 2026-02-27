@@ -46,7 +46,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core';
-import type { ClaudeSettings, Project, HistoryEntry, EnvSwitcherConfig, EnvProfile, TransformedSession, ResumeConfig, BackupConfig } from '../types/claude';
+import type { ClaudeSettings, Project, HistoryEntry, EnvSwitcherConfig, EnvProfile, TransformedSession, ResumeConfig, BackupConfig, FixDefinition, FixResult } from '../types/claude';
 
 // ============ 路径工具函数 ============
 
@@ -481,6 +481,34 @@ export async function readBackupConfig(): Promise<BackupConfig> {
  */
 export async function saveBackupConfig(config: BackupConfig): Promise<void> {
   return invoke<void>('save_backup_config', { config });
+}
+
+// ============ 一键修复 ============
+
+/**
+ * 获取所有可用的一键修复项列表
+ *
+ * 从 Rust 后端修复注册表中获取所有修复项的元数据。
+ * 返回的列表按注册顺序排列。
+ *
+ * @returns FixDefinition 数组
+ */
+export async function listFixers(): Promise<FixDefinition[]> {
+  return invoke<FixDefinition[]>('list_fixers');
+}
+
+/**
+ * 执行指定的一键修复
+ *
+ * 根据 fixer_id 在 Rust 后端查找对应修复项并执行。
+ * 修复前会通过 file_guard 自动创建双重备份。
+ *
+ * @param fixerId - 修复项的唯一标识符（如 "strip_thinking"）
+ * @param sessionFilePath - 要修复的会话 JSONL 文件的绝对路径
+ * @returns FixResult，包含是否成功、结果消息和受影响行数
+ */
+export async function executeFixer(fixerId: string, sessionFilePath: string): Promise<FixResult> {
+  return invoke<FixResult>('execute_fixer', { fixerId, sessionFilePath });
 }
 
 /**

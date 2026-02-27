@@ -5,6 +5,8 @@
 //! - `open_resume_terminal` - 打开终端执行 claude --resume 命令
 //! - `read_backup_config` / `save_backup_config` - 备份配置读写
 //! - `get_temp_backups` - 获取本次运行期间的临时备份列表
+//! - `list_fixers` - 获取所有可用的一键修复项列表
+//! - `execute_fixer` - 执行指定的一键修复
 //!
 //! 所有 CCR 配置存储在 `~/.mo/CCR/` 目录下，
 //! 与 Claude Code 的 `settings.json` 完全隔离。
@@ -14,6 +16,7 @@ use tauri::State;
 
 use crate::services::cache::AppCache;
 use crate::services::file_guard::{self, BackupConfig, TempBackupEntry};
+use crate::services::fixers::{self, FixDefinition, FixResult};
 use crate::utils::path;
 
 /// 一键 Resume 功能的配置数据结构
@@ -318,4 +321,42 @@ pub async fn save_backup_config(config: BackupConfig) -> Result<(), String> {
 #[tauri::command]
 pub async fn get_temp_backups(cache: State<'_, AppCache>) -> Result<Vec<TempBackupEntry>, String> {
     Ok(cache.get_all_temp_backups())
+}
+
+// ============ 一键修复 Commands ============
+
+/// 获取所有可用的一键修复项列表
+///
+/// 从修复注册表中收集所有修复项的元数据定义，供前端弹窗展示。
+/// 返回的列表按注册顺序排列。
+///
+/// # 返回值
+/// 返回 FixDefinition 数组，包含每个修复项的 id、名称、描述、修复方式和搜索标签
+#[tauri::command]
+pub async fn list_fixers() -> Result<Vec<FixDefinition>, String> {
+    Ok(fixers::list_definitions())
+}
+
+/// 执行指定的一键修复
+///
+/// 根据 fixer_id 在注册表中查找对应的修复项并执行。
+/// 修复逻辑通过 `file_guard` 安全写入文件，自动进行双重备份。
+///
+/// # 参数
+/// - `fixer_id` - 修复项的唯一标识符（如 "strip_thinking"）
+/// - `session_file_path` - 要修复的会话 JSONL 文件的绝对路径
+/// - `cache` - Tauri managed state，传递给 file_guard 进行备份注册
+///
+/// # 返回值
+/// 返回 FixResult，包含修复是否成功、结果消息和受影响行数
+///
+/// # 错误
+/// 未找到指定 ID 的修复项或修复执行失败时返回错误
+#[tauri::command]
+pub async fn execute_fixer(
+    fixer_id: String,
+    session_file_path: String,
+    cache: State<'_, AppCache>,
+) -> Result<FixResult, String> {
+    fixers::execute_by_id(&fixer_id, &session_file_path, &cache).await
 }

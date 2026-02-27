@@ -594,3 +594,55 @@ export interface BackupConfig {
   /** 是否启用主动备份（在原文件同目录创建 .ccbak 文件） */
   autoBackupEnabled: boolean;
 }
+
+/**
+ * 修复档位级别
+ *
+ * 四个档位从低到高，权限逐渐递增：
+ * - entry: 条目修复，只能操作解析后的消息条目
+ * - content: 内容修复，可读写文件原始文本
+ * - file: 文件修复，拥有对该文件的直接操作权限
+ * - full: 特殊修复，完全权限无限制
+ *
+ * 对应 Rust 后端 `services::fixers::FixLevel` 枚举。
+ */
+export type FixLevel = 'entry' | 'content' | 'file' | 'full';
+
+/**
+ * 一键修复项定义接口
+ *
+ * 描述一个修复项的完整元数据，供弹窗列表展示和搜索过滤。
+ * 配合 `FixResult` 接口实现修复执行反馈。
+ *
+ * 对应 Rust 后端 `services::fixers::FixDefinition` 结构体。
+ */
+export interface FixDefinition {
+  /** 唯一标识符（如 "strip_thinking"），用于定位执行修复 */
+  id: string;
+  /** 问题名称（如 "400 (thinking block) 错误"） */
+  name: string;
+  /** 问题详细描述，可以是多行文本 */
+  description: string;
+  /** 修复方式说明 */
+  fixMethod: string;
+  /** 搜索标签，扩展搜索范围 */
+  tags: string[];
+  /** 修复档位级别，决定权限范围和 UI 标注样式 */
+  level: FixLevel;
+}
+
+/**
+ * 一键修复执行结果接口
+ *
+ * 修复执行完成后由 Rust 后端返回，展示修复结果。
+ *
+ * 对应 Rust 后端 `services::fixers::FixResult` 结构体。
+ */
+export interface FixResult {
+  /** 修复是否成功完成 */
+  success: boolean;
+  /** 结果消息（成功提示或错误原因） */
+  message: string;
+  /** 受影响的消息行数 */
+  affectedLines: number;
+}
