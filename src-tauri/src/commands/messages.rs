@@ -1,10 +1,11 @@
 //! # 消息读写 Tauri Commands
 //!
-//! 提供会话消息的读取、编辑、删除、搜索、导出等 Tauri command 处理函数：
+//! 提供会话消息的读取、编辑、删除、插入、搜索、导出等 Tauri command 处理函数：
 //! - `read_session_messages` - 读取会话并返回 TransformedSession
 //! - `delete_message` - 删除单条消息并返回更新后的 TransformedSession
 //! - `delete_messages` - 批量删除消息并返回更新后的 TransformedSession
 //! - `edit_message_content` - 编辑消息文本内容并返回更新后的 TransformedSession
+//! - `insert_message` - 在指定位置插入新消息并返回更新后的 TransformedSession
 //! - `delete_session` - 删除整个会话文件
 //! - `search_session` - 在缓存的搜索文本上执行 SIMD 加速子串搜索
 //! - `export_session` - 导出会话为 Markdown 或 JSON 格式
@@ -305,6 +306,102 @@ pub async fn edit_message_content(
 
     // 重新 transform 并更新缓存
     let (transformed, search_texts, original_texts) = transformer::transform_session(&updated);
+    cache.set_session(&session_file_path, transformed.clone(), search_texts, original_texts);
+
+    Ok(transformed)
+}
+
+/// 在指定位置插入一条新消息
+///
+/// 在 `after_uuid` 指定的消息之后插入一条前端构造好的新消息。
+/// 如果 `after_uuid` 为空字符串，则插入到消息列表的最前方（index 0）。
+/// 操作完成后重新 transform 并更新缓存，返回新的 TransformedSession。
+///
+/// # 参数
+/// - `session_file_path` - 会话 JSONL 文件的绝对路径
+/// - `after_uuid` - 插入到此 UUID 消息之后（空字符串表示插入到开头）
+/// - `new_message` - 前端构造好的完整 SessionMessage JSON 对象
+/// - `cache` - Tauri managed state，内存缓存
+///
+/// # 返回值
+/// 返回插入后重新转换的 TransformedSession
+///
+/// # 错误
+/// - 文件读写失败时返回错误
+/// - `after_uuid` 非空但未找到匹配消息时返回错误
+#[tauri::command]
+pub async fn insert_message(
+    session_file_path: String,
+    after_uuid: String,
+    new_message: Value,
+    cache: State<'_, AppCache>,
+) -> Result<TransformedSession, String> {
+    // 从文件读取原始数据
+    let mut messages = parser::read_messages(&session_file_path).await?;
+
+    // 计算插入位置
+    let insert_index = if after_uuid.is_empty() {
+        // 空字符串：插入到最前方
+        0
+    } else {
+        // 查找 after_uuid 对应的消息索引
+        let found = messages.iter().position(|msg| {
+            msg.get("uuid")
+                .and_then(|v| v.as_str())
+                .map(|uuid| uuid == after_uuid)
+                .unwrap_or(false)
+        });
+
+        match found {
+            Some(idx) => idx + 1, // 在目标消息之后插入
+            None => return Err(format!("未找到 UUID 为 '{}' 的消息", after_uuid)),
+        }
+    };
+
+    // 在计算好的位置插入新消息
+    messages.insert(insert_index, new_message);
+
+    // ---- 更新父消息链 ----
+    // Claude Code 的 JSONL 格式中，消息通过 parentUuid 构成对话树。
+    // 在 A 和 B 之间插入 NEW 时：
+    //   - NEW 的 parentUuid 已由前端设置为 A 的 uuid
+    //   - 需要将原本指向 A 的后续消息（B）的 parentUuid 更新为 NEW 的 uuid
+    //
+    // 仅更新紧跟在插入位置之后、且 parentUuid 原本指向 after_uuid 的消息。
+    // 这保证了对话树的链式结构不被打断。
+    if !after_uuid.is_empty() {
+        // 获取新消息的 uuid
+        let new_uuid = messages[insert_index]
+            .get("uuid")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        if let Some(new_uuid) = new_uuid {
+            // 扫描插入位置之后的消息，找到第一条 parentUuid == after_uuid 的消息并更新
+            for msg in messages.iter_mut().skip(insert_index + 1) {
+                let is_child_of_after = msg
+                    .get("parentUuid")
+                    .and_then(|v| v.as_str())
+                    .map(|uuid| uuid == after_uuid)
+                    .unwrap_or(false);
+
+                if is_child_of_after {
+                    // 将其 parentUuid 指向新消息
+                    msg.as_object_mut().map(|obj| {
+                        obj.insert("parentUuid".to_string(), Value::String(new_uuid.clone()));
+                    });
+                    // 只更新第一条匹配的（主链中的直接后继），避免影响分支（sidechain）
+                    break;
+                }
+            }
+        }
+    }
+
+    // 写回文件（通过 file_guard 安全写入）
+    parser::write_messages(&session_file_path, &messages, "insert_message", &cache).await?;
+
+    // 重新 transform 并更新缓存
+    let (transformed, search_texts, original_texts) = transformer::transform_session(&messages);
     cache.set_session(&session_file_path, transformed.clone(), search_texts, original_texts);
 
     Ok(transformed)

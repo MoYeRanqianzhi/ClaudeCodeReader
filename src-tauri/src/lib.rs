@@ -77,6 +77,7 @@ pub fn run() {
             commands::messages::delete_message,
             commands::messages::delete_messages,
             commands::messages::edit_message_content,
+            commands::messages::insert_message,
             commands::messages::delete_session,
             // 搜索和导出 commands
             commands::messages::search_session,

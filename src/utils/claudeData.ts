@@ -329,6 +329,29 @@ export async function editMessageContent(
   });
 }
 
+/**
+ * 在指定位置插入一条新消息
+ *
+ * 通过 Rust 后端在单次 IPC 调用中完成：读取文件 → 定位插入位置 → 插入 → 写入文件 → 重新 transform。
+ * 新消息由前端构造完整的 SessionMessage JSON 对象，Rust 后端仅负责定位和持久化。
+ *
+ * @param sessionFilePath - 会话 JSONL 文件的绝对路径
+ * @param afterUuid - 插入到此 UUID 消息之后（空字符串表示插入到最前方）
+ * @param newMessage - 前端构造好的完整 SessionMessage JSON 对象
+ * @returns 返回插入后重新转换的 TransformedSession
+ */
+export async function insertMessage(
+  sessionFilePath: string,
+  afterUuid: string,
+  newMessage: Record<string, unknown>,
+): Promise<TransformedSession> {
+  return invoke<TransformedSession>('insert_message', {
+    sessionFilePath,
+    afterUuid,
+    newMessage,
+  });
+}
+
 // ============ 搜索功能 ============
 
 /**

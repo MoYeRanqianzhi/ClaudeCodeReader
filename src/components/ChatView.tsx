@@ -14,15 +14,15 @@
  *              替代内联 SVG，以提升一致性和可维护性。
  */
 
-import { useState, useRef, useEffect, useMemo, useCallback, memo } from 'react';
+import React, { useState, useRef, useEffect, useMemo, useCallback, memo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   ChevronRight, ChevronDown, ChevronUp, X, CheckSquare, Square, Filter,
-  Download, FileText, FileJson, RefreshCw, ArrowLeft,
+  Download, FileText, FileJson, RefreshCw, ArrowLeft, Plus,
   Copy, Edit2, Trash2, Bot, User, Lightbulb, Wrench, Archive, Terminal, ExternalLink, Search
 } from 'lucide-react';
 import type { Session, Project, DisplayMessage, TransformedSession, ToolUseInfo, SearchHighlight } from '../types/claude';
-import { formatTimestamp, searchSession, openResumeTerminal } from '../utils/claudeData';
+import { formatTimestamp, searchSession, openResumeTerminal, insertMessage } from '../utils/claudeData';
 import { parseJsonlPath } from '../utils/messageTransform';
 import { MessageBlockList } from './MessageBlockList';
 import { MessageContentRenderer } from './MessageContentRenderer';
@@ -30,6 +30,7 @@ import { useProgressiveRender } from '../hooks/useProgressiveRender';
 import { useCollapsible } from '../hooks/useCollapsible';
 import { NavSearchBar, type SearchRequest, type NavSearchBarHandle } from './NavSearchBar';
 import { QuickFixModal } from './QuickFixModal';
+import { MessageDropZone, _hoveredAfterUuid, resetHoveredAfterUuid } from './MessageDropZone';
 
 /**
  * 可筛选的消息类型
@@ -761,6 +762,22 @@ const FILTER_CONFIG: { type: FilterableType; icon: typeof User; label: string }[
  * @param props - 组件属性
  * @returns JSX 元素
  */
+
+/**
+ * 模块级拖拽标志位
+ *
+ * 用于在 onDrop 处理器中识别当前拖拽是否来自"添加消息"按钮。
+ * 使用模块级变量（而非 React state）的原因：
+ *
+ * 1. **避免 dataTransfer.getData() 在 WebView2 中可能返回空值的问题**
+ *    HTML5 DnD 规范中 dataTransfer 在不同事件阶段有不同的访问权限，
+ *    某些 WebView2 + Tauri 配置下 getData() 可能返回空字符串。
+ *
+ * 2. **避免 React state 闭包/批处理竞态**
+ *    模块级变量是同步的，不受 React 事件批处理、useCallback 闭包捕获
+ *    或 onDragEnd/onDrop 事件顺序的影响。
+ */
+let _addMessageDragActive = false;
 export function ChatView({
   session,
   transformedSession,
@@ -809,6 +826,20 @@ export function ChatView({
   const [showToolsDropdown, setShowToolsDropdown] = useState(false);
   /** 控制一键修复弹窗的显示/隐藏状态 */
   const [showQuickFix, setShowQuickFix] = useState(false);
+
+  // ==================== 拖拽添加消息状态 ====================
+  /** 是否正在拖拽 Add 图标（全局拖拽状态，传递给所有 MessageDropZone） */
+  const [isDraggingAdd, setIsDraggingAdd] = useState(false);
+  /** 正在编辑的新消息插入位置（对应 afterUuid，null 表示未在插入） */
+  const [insertingAfterUuid, setInsertingAfterUuid] = useState<string | null>(null);
+  /** 内联编辑器阶段：'select' = 类型选择，'edit' = 内容编辑 */
+  const [insertPhase, setInsertPhase] = useState<'select' | 'edit'>('select');
+  /** 内联编辑器：用户选定的消息类型 */
+  const [insertType, setInsertType] = useState<string | null>(null);
+  /** 内联编辑器：编辑内容 */
+  const [insertContent, setInsertContent] = useState('');
+  /** 内联编辑器：保存中标志 */
+  const [insertSaving, setInsertSaving] = useState(false);
 
   // ==================== VSCode 风格导航搜索状态 ====================
   /** 导航搜索栏是否打开 */
@@ -1305,6 +1336,151 @@ export function ChatView({
     setEditBlocks([]);
   };
 
+  // ==================== 拖拽添加消息处理函数 ====================
+
+  /**
+   * 新消息保存回调：NewMessageEditor 构造好完整消息后调用。
+   * 通过 Rust 后端持久化到 JSONL 文件，然后刷新会话数据。
+   */
+  /** 重置内联编辑器所有状态 */
+  const resetInsertEditor = useCallback(() => {
+    setInsertingAfterUuid(null);
+    setInsertPhase('select');
+    setInsertType(null);
+    setInsertContent('');
+    setInsertSaving(false);
+  }, []);
+
+  /** 内联编辑器：选择消息类型 → 进入编辑阶段 */
+  const handleInsertTypeSelect = useCallback((type: string) => {
+    setInsertType(type);
+    // 根据类型预填充编辑内容
+    if (type === 'file-history-snapshot') {
+      setInsertContent(JSON.stringify({
+        messageId: '', snapshot: { messageId: '', trackedFileBackups: {}, timestamp: new Date().toISOString() }, isSnapshotUpdate: false,
+      }, null, 2));
+    } else if (type === 'queue-operation') {
+      setInsertContent(JSON.stringify({ operation: 'enqueue', data: {} }, null, 2));
+    } else {
+      setInsertContent('');
+    }
+    setInsertPhase('edit');
+  }, []);
+
+  /** 内联编辑器：构造完整消息并保存 */
+  const handleInsertSave = useCallback(async () => {
+    if (!session || !insertType || insertSaving || insertingAfterUuid === null) return;
+    setInsertSaving(true);
+    try {
+      const uuid = crypto.randomUUID();
+      const timestamp = new Date().toISOString();
+      const afterUuid = insertingAfterUuid ?? '';
+      const baseMessage: Record<string, unknown> = {
+        type: insertType, uuid,
+        parentUuid: afterUuid || null,
+        isSidechain: false,
+        sessionId: session.id,
+        timestamp,
+      };
+      switch (insertType) {
+        case 'user':
+          baseMessage.message = { role: 'user', content: insertContent };
+          break;
+        case 'assistant':
+          baseMessage.message = { role: 'assistant', content: [{ type: 'text', text: insertContent }] };
+          break;
+        case 'custom-title':
+          baseMessage.title = insertContent;
+          break;
+        case 'tag':
+          baseMessage.value = insertContent;
+          break;
+        case 'file-history-snapshot':
+        case 'queue-operation':
+          try { Object.assign(baseMessage, JSON.parse(insertContent)); } catch { baseMessage.content = insertContent; }
+          break;
+      }
+      await insertMessage(session.filePath, afterUuid, baseMessage);
+      onRefresh();
+    } catch (err) {
+      console.error('插入消息失败:', err);
+    } finally {
+      resetInsertEditor();
+    }
+  }, [session, insertType, insertSaving, insertingAfterUuid, insertContent, onRefresh, resetInsertEditor]);
+
+  /**
+   * 滚动容器的统一 onDrop 处理器
+   *
+   * 位置确定策略（两层）：
+   *
+   * 1. **优先使用 DropZone 上报的位置**（O(1)，精确）
+   *    当用户悬停在 DropZone 上松手时，`_hoveredAfterUuid` 已由 DropZone
+   *    的 dragEnter 写入。直接读取即可，无需 DOM 遍历。
+   *
+   * 2. **兜底：二分查找可视消息**
+   *    当用户直接在消息内容区域松手（不在 DropZone 上）时，
+   *    `_hoveredAfterUuid` 为 null。此时仅对**视口内可见的消息**
+   *    做二分查找，避免遍历全部 643+ 条消息的 DOM 元素。
+   *
+   * 通过模块级标志位 `_addMessageDragActive` 验证拖拽来源，
+   * 避免依赖 `dataTransfer.getData()` 或 React state。
+   */
+  const handleScrollContainerDrop = useCallback((e: React.DragEvent) => {
+    if (!_addMessageDragActive) return;
+
+    e.preventDefault();
+    _addMessageDragActive = false;
+
+    // ---- 策略 1：使用 DropZone 上报的精确位置 ----
+    const hoveredUuid = _hoveredAfterUuid;
+    resetHoveredAfterUuid();
+
+    if (hoveredUuid !== null) {
+      setIsDraggingAdd(false);
+      setInsertingAfterUuid(hoveredUuid);
+      return;
+    }
+
+    // ---- 策略 2：兜底 - 仅对视口内消息做查找 ----
+    const container = scrollContainerRef.current;
+    if (!container || visibleMessages.length === 0) {
+      setIsDraggingAdd(false);
+      return;
+    }
+
+    const cursorY = e.clientY;
+
+    // 获取视口边界，仅查询视口附近的消息（避免遍历全部 DOM）
+    const containerRect = container.getBoundingClientRect();
+    const msgElements = container.querySelectorAll<HTMLElement>('[data-msg-index]');
+    let bestAfterUuid = '';  // 默认插入到最前方
+
+    // 只检查视口附近的消息（top 在视口范围 ±200px 内的元素）
+    const viewportTop = containerRect.top - 200;
+    const viewportBottom = containerRect.bottom + 200;
+
+    for (let i = 0; i < msgElements.length; i++) {
+      const rect = msgElements[i].getBoundingClientRect();
+
+      // 跳过完全在视口上方的元素（优化：从头跳过不可见的部分）
+      if (rect.bottom < viewportTop) continue;
+      // 超出视口下方的元素不再处理
+      if (rect.top > viewportBottom) break;
+
+      const midY = rect.top + rect.height / 2;
+      if (cursorY > midY) {
+        const msgIndex = parseInt(msgElements[i].getAttribute('data-msg-index') || '0', 10);
+        bestAfterUuid = visibleMessages[msgIndex]?.sourceUuid || '';
+      } else {
+        break;
+      }
+    }
+
+    setIsDraggingAdd(false);
+    setInsertingAfterUuid(bestAfterUuid);
+  }, [visibleMessages]);
+
   /* 空状态：未选择任何会话时显示引导界面 */
   if (!session) {
     return (
@@ -1390,6 +1566,31 @@ export function ChatView({
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
+          {/* 拖拽添加消息按钮：拖出后放置在消息间隙可插入新消息 */}
+          <div
+            draggable
+            onDragStart={(e) => {
+              // 清除上次的编辑器（所有状态）
+              resetInsertEditor();
+              // 设置模块级标志位 + React 状态
+              _addMessageDragActive = true;
+              setIsDraggingAdd(true);
+              // 设置拖拽数据标识（HTML5 Drag API 要求）
+              e.dataTransfer.setData('text/plain', 'add-message');
+              e.dataTransfer.effectAllowed = 'copy';
+            }}
+            onDragEnd={() => {
+              // 始终清理模块级标志位和 React 状态（安全兜底）。
+              _addMessageDragActive = false;
+              resetHoveredAfterUuid();
+              setIsDraggingAdd(false);
+            }}
+            className="p-2 rounded-lg hover:bg-accent transition-colors cursor-grab active:cursor-grabbing hover:scale-105 active:scale-95"
+            title="拖拽到消息之间插入新消息"
+          >
+            <Plus className="w-5 h-5" />
+          </div>
+
           {/* 实用工具下拉菜单 */}
           <div className="relative" ref={toolsRef}>
             <motion.button
@@ -1685,6 +1886,15 @@ export function ChatView({
       <div
         ref={scrollContainerRef}
         onScroll={handleScrollForRender}
+        // 全局 dragOver：允许 HTML5 DnD 放置，防止浏览器显示禁止光标。
+        // 始终绑定（非条件式），因为 dragover 仅在拖拽进行中才触发，无性能开销。
+        onDragOver={(e) => {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'copy';
+        }}
+        // 兜底 onDrop：当用户松手在消息内容上（而非 DropZone 条上）时，
+        // 通过光标 Y 坐标计算最近的消息间隙位置。
+        onDrop={handleScrollContainerDrop}
         className="flex-1 overflow-y-auto overflow-x-hidden p-4 gap-4 custom-scrollbar relative flex flex-col"
       >
         {/* 渲染说明：
@@ -1695,29 +1905,278 @@ export function ChatView({
         {visibleMessages.length === 0 ? (
           <div className="text-center text-muted-foreground py-8">没有消息</div>
         ) : (
-          visibleMessages.map((msg, index) => (
-            <MessageItem
-              key={msg.displayId}
-              msg={msg}
-              index={index}
-              isRendered={isRendered(index)}
-              projectPath={projectPath}
-              toolUseMap={toolUseMap}
-              searchHighlight={navSearchResultSet.has(msg.displayId) ? searchHighlight : undefined}
-              searchAutoExpand={searchAutoExpandId === msg.displayId}
-              selectionMode={selectionMode}
-              isSelected={selectedMessages.has(msg.sourceUuid)}
-              isEditing={editingId === msg.displayId}
-              editBlocks={editBlocks}
-              onToggleSelect={onToggleSelect}
-              onDeleteMessage={onDeleteMessage}
-              onStartEdit={handleStartEdit}
-              onSaveEdit={handleSaveEdit}
-              onCancelEdit={handleCancelEdit}
-              onEditBlockChange={setEditBlocks}
-              onNavigateToSession={onNavigateToSession}
-            />
-          ))
+          <>
+            {visibleMessages.map((msg, index) => {
+              // 计算当前消息前方放置区域的 afterUuid
+              // index === 0 时 afterUuid 为空字符串（表示插入到最前方）
+              // 否则为前一条消息的 sourceUuid
+              const dropAfterUuid = index === 0 ? '' : visibleMessages[index - 1].sourceUuid;
+
+              return (
+                <React.Fragment key={msg.displayId}>
+                  {/* 消息前方的拖拽放置区域 */}
+                  <MessageDropZone
+                    afterUuid={dropAfterUuid}
+                    isDragging={isDraggingAdd}
+                  />
+                  {/* 内联编辑器：拖拽放置后就地展开的消息编辑面板 */}
+                  {insertingAfterUuid === dropAfterUuid && (
+                    <div style={{
+                      background: 'var(--card)',
+                      color: 'var(--foreground)',
+                      border: '2px solid var(--primary)',
+                      borderRadius: '12px',
+                      padding: '16px',
+                      margin: '4px 0',
+                      boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                    }}>
+                      {insertPhase === 'select' ? (
+                        /* Phase A: 类型选择 */
+                        <>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                            <span style={{ fontSize: '13px', fontWeight: 600 }}>选择消息类型</span>
+                            <button onClick={resetInsertEditor} style={{ background: 'none', border: 'none', color: 'var(--muted-foreground)', cursor: 'pointer', padding: '4px' }}>
+                              <X style={{ width: 16, height: 16 }} />
+                            </button>
+                          </div>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                            {([
+                              { type: 'user', Icon: User, label: '用户消息', c: 'var(--color-blue-500, #3b82f6)' },
+                              { type: 'assistant', Icon: Bot, label: '助手消息', c: 'var(--color-purple-500, #8b5cf6)' },
+                              { type: 'file-history-snapshot', Icon: Archive, label: '文件快照', c: 'var(--color-amber-500, #f59e0b)' },
+                              { type: 'queue-operation', Icon: Terminal, label: '队列操作', c: 'var(--color-green-500, #22c55e)' },
+                              { type: 'custom-title', Icon: FileText, label: '自定义标题', c: 'var(--color-cyan-500, #06b6d4)' },
+                              { type: 'tag', Icon: Lightbulb, label: '标签', c: 'var(--color-rose-500, #f43f5e)' },
+                            ] as const).map(({ type, Icon, label, c }) => (
+                              <button
+                                key={type}
+                                onClick={() => handleInsertTypeSelect(type)}
+                                style={{
+                                  display: 'flex', alignItems: 'center', gap: '8px',
+                                  padding: '10px 12px',
+                                  border: '1px solid var(--border)',
+                                  borderRadius: '8px',
+                                  background: 'var(--secondary)',
+                                  color: c,
+                                  cursor: 'pointer',
+                                  textAlign: 'left' as const,
+                                  fontSize: '13px',
+                                  fontWeight: 500,
+                                  transition: 'background 0.15s',
+                                }}
+                                onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--accent)'; }}
+                                onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--secondary)'; }}
+                              >
+                                <Icon style={{ width: 16, height: 16, flexShrink: 0 }} />
+                                <span>{label}</span>
+                              </button>
+                            ))}
+                          </div>
+                        </>
+                      ) : (
+                        /* Phase B: 内容编辑 */
+                        <>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                            <span style={{ fontSize: '12px', fontWeight: 500, color: 'var(--muted-foreground)' }}>
+                              {insertType === 'user' ? '用户消息' : insertType === 'assistant' ? '助手消息'
+                                : insertType === 'file-history-snapshot' ? '文件快照' : insertType === 'queue-operation' ? '队列操作'
+                                : insertType === 'custom-title' ? '自定义标题' : '标签'}
+                            </span>
+                            <button onClick={resetInsertEditor} style={{ background: 'none', border: 'none', color: 'var(--muted-foreground)', cursor: 'pointer', padding: '4px' }}>
+                              <X style={{ width: 16, height: 16 }} />
+                            </button>
+                          </div>
+                          {(insertType !== 'custom-title' && insertType !== 'tag') ? (
+                            <textarea
+                              value={insertContent}
+                              onChange={(e) => setInsertContent(e.target.value)}
+                              placeholder={insertType === 'file-history-snapshot' || insertType === 'queue-operation' ? '编辑 JSON 内容...' : '输入消息内容...'}
+                              autoFocus
+                              style={{
+                                width: '100%', height: '128px',
+                                padding: '8px 12px',
+                                border: '1px solid var(--border)',
+                                borderRadius: '8px',
+                                background: 'var(--secondary)',
+                                color: 'var(--foreground)',
+                                fontSize: '13px',
+                                fontFamily: 'monospace',
+                                resize: 'vertical',
+                                outline: 'none',
+                              }}
+                            />
+                          ) : (
+                            <input
+                              type="text"
+                              value={insertContent}
+                              onChange={(e) => setInsertContent(e.target.value)}
+                              placeholder={insertType === 'custom-title' ? '输入自定义标题...' : '输入标签值...'}
+                              autoFocus
+                              style={{
+                                width: '100%',
+                                padding: '8px 12px',
+                                border: '1px solid var(--border)',
+                                borderRadius: '8px',
+                                background: 'var(--secondary)',
+                                color: 'var(--foreground)',
+                                fontSize: '13px',
+                                outline: 'none',
+                              }}
+                            />
+                          )}
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px' }}>
+                            <button
+                              onClick={() => { setInsertPhase('select'); setInsertType(null); setInsertContent(''); }}
+                              style={{
+                                display: 'flex', alignItems: 'center', gap: '4px',
+                                padding: '6px 10px', border: 'none', borderRadius: '6px',
+                                background: 'none', color: 'var(--muted-foreground)',
+                                cursor: 'pointer', fontSize: '13px',
+                              }}
+                            >
+                              <ArrowLeft style={{ width: 14, height: 14 }} />
+                              返回
+                            </button>
+                            <div style={{ display: 'flex', gap: '8px' }}>
+                              <button
+                                onClick={resetInsertEditor}
+                                style={{
+                                  padding: '6px 12px', border: 'none', borderRadius: '6px',
+                                  background: 'none', color: 'var(--muted-foreground)',
+                                  cursor: 'pointer', fontSize: '13px',
+                                }}
+                              >取消</button>
+                              <button
+                                onClick={handleInsertSave}
+                                disabled={insertSaving || !insertContent.trim()}
+                                style={{
+                                  padding: '6px 12px', border: 'none', borderRadius: '6px',
+                                  background: (insertSaving || !insertContent.trim()) ? 'var(--muted)' : 'var(--primary)',
+                                  color: (insertSaving || !insertContent.trim()) ? 'var(--muted-foreground)' : 'var(--primary-foreground)',
+                                  cursor: (insertSaving || !insertContent.trim()) ? 'not-allowed' : 'pointer',
+                                  fontSize: '13px', fontWeight: 500,
+                                }}
+                              >{insertSaving ? '保存中...' : '保存'}</button>
+                            </div>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
+                  {/* 消息本体 */}
+                  <MessageItem
+                    msg={msg}
+                    index={index}
+                    isRendered={isRendered(index)}
+                    projectPath={projectPath}
+                    toolUseMap={toolUseMap}
+                    searchHighlight={navSearchResultSet.has(msg.displayId) ? searchHighlight : undefined}
+                    searchAutoExpand={searchAutoExpandId === msg.displayId}
+                    selectionMode={selectionMode}
+                    isSelected={selectedMessages.has(msg.sourceUuid)}
+                    isEditing={editingId === msg.displayId}
+                    editBlocks={editBlocks}
+                    onToggleSelect={onToggleSelect}
+                    onDeleteMessage={onDeleteMessage}
+                    onStartEdit={handleStartEdit}
+                    onSaveEdit={handleSaveEdit}
+                    onCancelEdit={handleCancelEdit}
+                    onEditBlockChange={setEditBlocks}
+                    onNavigateToSession={onNavigateToSession}
+                  />
+                </React.Fragment>
+              );
+            })}
+            {/* 最后一条消息之后的放置区域（drop 后原地转变为编辑器） */}
+            {(() => {
+              const lastAfterUuid = visibleMessages.length > 0
+                ? visibleMessages[visibleMessages.length - 1].sourceUuid
+                : '';
+              return (
+                <>
+                  <MessageDropZone
+                    afterUuid={lastAfterUuid}
+                    isDragging={isDraggingAdd}
+                  />
+                  {insertingAfterUuid === lastAfterUuid && (
+                    <div style={{
+                      background: 'var(--card)',
+                      color: 'var(--foreground)',
+                      border: '2px solid var(--primary)',
+                      borderRadius: '12px',
+                      padding: '16px',
+                      margin: '4px 0',
+                      boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                    }}>
+                      {insertPhase === 'select' ? (
+                        <>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                            <span style={{ fontSize: '13px', fontWeight: 600 }}>选择消息类型</span>
+                            <button onClick={resetInsertEditor} style={{ background: 'none', border: 'none', color: 'var(--muted-foreground)', cursor: 'pointer', padding: '4px' }}>
+                              <X style={{ width: 16, height: 16 }} />
+                            </button>
+                          </div>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                            {([
+                              { type: 'user', Icon: User, label: '用户消息', c: 'var(--color-blue-500, #3b82f6)' },
+                              { type: 'assistant', Icon: Bot, label: '助手消息', c: 'var(--color-purple-500, #8b5cf6)' },
+                              { type: 'file-history-snapshot', Icon: Archive, label: '文件快照', c: 'var(--color-amber-500, #f59e0b)' },
+                              { type: 'queue-operation', Icon: Terminal, label: '队列操作', c: 'var(--color-green-500, #22c55e)' },
+                              { type: 'custom-title', Icon: FileText, label: '自定义标题', c: 'var(--color-cyan-500, #06b6d4)' },
+                              { type: 'tag', Icon: Lightbulb, label: '标签', c: 'var(--color-rose-500, #f43f5e)' },
+                            ] as const).map(({ type, Icon, label, c }) => (
+                              <button key={type} onClick={() => handleInsertTypeSelect(type)}
+                                style={{
+                                  display: 'flex', alignItems: 'center', gap: '8px',
+                                  padding: '10px 12px', border: '1px solid var(--border)', borderRadius: '8px',
+                                  background: 'var(--secondary)', color: c, cursor: 'pointer',
+                                  textAlign: 'left' as const, fontSize: '13px', fontWeight: 500, transition: 'background 0.15s',
+                                }}
+                                onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--accent)'; }}
+                                onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--secondary)'; }}
+                              >
+                                <Icon style={{ width: 16, height: 16, flexShrink: 0 }} />
+                                <span>{label}</span>
+                              </button>
+                            ))}
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                            <span style={{ fontSize: '12px', fontWeight: 500, color: 'var(--muted-foreground)' }}>{insertType}</span>
+                            <button onClick={resetInsertEditor} style={{ background: 'none', border: 'none', color: 'var(--muted-foreground)', cursor: 'pointer', padding: '4px' }}>
+                              <X style={{ width: 16, height: 16 }} />
+                            </button>
+                          </div>
+                          {(insertType !== 'custom-title' && insertType !== 'tag') ? (
+                            <textarea value={insertContent} onChange={(e) => setInsertContent(e.target.value)} placeholder="输入消息内容..." autoFocus
+                              style={{ width: '100%', height: '128px', padding: '8px 12px', border: '1px solid var(--border)', borderRadius: '8px', background: 'var(--secondary)', color: 'var(--foreground)', fontSize: '13px', fontFamily: 'monospace', resize: 'vertical', outline: 'none' }} />
+                          ) : (
+                            <input type="text" value={insertContent} onChange={(e) => setInsertContent(e.target.value)} placeholder="输入内容..." autoFocus
+                              style={{ width: '100%', padding: '8px 12px', border: '1px solid var(--border)', borderRadius: '8px', background: 'var(--secondary)', color: 'var(--foreground)', fontSize: '13px', outline: 'none' }} />
+                          )}
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px' }}>
+                            <button onClick={() => { setInsertPhase('select'); setInsertType(null); setInsertContent(''); }}
+                              style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '6px 10px', border: 'none', borderRadius: '6px', background: 'none', color: 'var(--muted-foreground)', cursor: 'pointer', fontSize: '13px' }}>
+                              <ArrowLeft style={{ width: 14, height: 14 }} />返回
+                            </button>
+                            <div style={{ display: 'flex', gap: '8px' }}>
+                              <button onClick={resetInsertEditor} style={{ padding: '6px 12px', border: 'none', borderRadius: '6px', background: 'none', color: 'var(--muted-foreground)', cursor: 'pointer', fontSize: '13px' }}>取消</button>
+                              <button onClick={handleInsertSave} disabled={insertSaving || !insertContent.trim()}
+                                style={{ padding: '6px 12px', border: 'none', borderRadius: '6px', background: (insertSaving || !insertContent.trim()) ? 'var(--muted)' : 'var(--primary)', color: (insertSaving || !insertContent.trim()) ? 'var(--muted-foreground)' : 'var(--primary-foreground)', cursor: (insertSaving || !insertContent.trim()) ? 'not-allowed' : 'pointer', fontSize: '13px', fontWeight: 500 }}>
+                                {insertSaving ? '保存中...' : '保存'}
+                              </button>
+                            </div>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </>
+              );
+            })()}
+          </>
         )}
       </div>
 
