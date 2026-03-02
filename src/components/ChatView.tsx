@@ -154,6 +154,11 @@ function CompactSummaryBlock({
                   <Archive className="w-3 h-3" />
                   压缩
                 </span>
+                {msg.isAbandoned && (
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-muted text-muted-foreground">
+                    遗弃
+                  </span>
+                )}
                 <span className="text-xs text-muted-foreground">
                   {formatTimestamp(msg.timestamp)}
                 </span>
@@ -273,6 +278,11 @@ function SystemMessageBlock({
         >
           <FileText className="w-3.5 h-3.5 shrink-0 text-primary/70" />
           <span className="font-medium shrink-0">计划</span>
+          {msg.isAbandoned && (
+            <span className="inline-flex items-center px-1.5 py-0 rounded-full text-xs font-medium bg-muted-foreground/15">
+              遗弃
+            </span>
+          )}
           {planTitle && (
             <span className="text-foreground/80 font-medium truncate min-w-0">
               {planTitle}
@@ -333,6 +343,11 @@ function SystemMessageBlock({
       >
         <IconComponent className="w-3 h-3" />
         <span className="font-medium">{label}</span>
+        {msg.isAbandoned && (
+          <span className="inline-flex items-center px-1.5 py-0 rounded-full text-xs font-medium bg-muted-foreground/15">
+            遗弃
+          </span>
+        )}
         <span className="opacity-60">{formatTimestamp(msg.timestamp)}</span>
         {expanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
       </div>
@@ -568,6 +583,12 @@ const MessageItem = memo(function MessageItem({
                     ? '工具结果'
                     : '助手'}
               </span>
+              {/* 遗弃标签：不在主链上的消息 */}
+              {msg.isAbandoned && (
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-muted text-muted-foreground">
+                  遗弃
+                </span>
+              )}
               <span className="text-xs text-muted-foreground">
                 {formatTimestamp(msg.timestamp)}
               </span>

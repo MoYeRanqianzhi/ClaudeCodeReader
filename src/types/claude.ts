@@ -491,6 +491,9 @@ export interface DisplayMessage {
   // ---- 通用元数据 ----
   /** 当前工作目录 */
   cwd: string | null;
+  /** 是否为遗弃消息（不在主链上）
+   *  主链 = 从 JSONL 最后一条消息沿 parentUuid 回溯到根的路径 */
+  isAbandoned: boolean;
 }
 
 /**

@@ -17,7 +17,7 @@
 //!   - `search_texts`：小写化版本，用于大小写不敏感搜索
 //!   - `original_texts`：原始大小写版本，用于大小写敏感搜索和正则搜索
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use rayon::prelude::*;
 use serde_json::Value;
@@ -58,6 +58,33 @@ struct PerMessageResult {
 /// `(TransformedSession, Vec<String>, Vec<String>)` 三元组：
 /// `(session, lowercase_texts, original_texts)`
 pub fn transform_session(messages: &[Value]) -> (TransformedSession, Vec<String>, Vec<String>) {
+    // ---- 阶段 0：计算主链 UUID 集合 ----
+    // Claude Code 的消息通过 parentUuid 构成对话树。当用户重试或分支时，
+    // 会产生不在当前对话路径上的"遗弃"消息。
+    // 主链定义：从 JSONL 最后一条消息沿 parentUuid 回溯到根消息的路径。
+    let main_chain_uuids: HashSet<String> = {
+        let mut parent_map: HashMap<&str, &str> = HashMap::new();
+        let mut last_uuid: Option<&str> = None;
+        for msg in messages {
+            if let Some(uuid) = msg.get("uuid").and_then(|v| v.as_str()) {
+                if let Some(parent) = msg.get("parentUuid").and_then(|v| v.as_str()) {
+                    parent_map.insert(uuid, parent);
+                }
+                last_uuid = Some(uuid);
+            }
+        }
+        // 从最后一条消息回溯到根
+        let mut chain = HashSet::new();
+        let mut current = last_uuid;
+        while let Some(uuid) = current {
+            if !chain.insert(uuid.to_string()) {
+                break; // 防御循环引用
+            }
+            current = parent_map.get(uuid).copied();
+        }
+        chain
+    };
+
     // ---- 阶段 1：并行 map，每条消息独立处理（分类 + tool_use 提取 + usage 提取）----
     let per_msg: Vec<PerMessageResult> = messages
         .par_iter()
@@ -81,7 +108,7 @@ pub fn transform_session(messages: &[Value]) -> (TransformedSession, Vec<String>
         // 累加 token_stats
         token_stats.accumulate(&result.usage);
         // 构建 DisplayMessage（User 消息拆分 tool_result）
-        build_display_messages(&mut display_messages, result.classification, msg);
+        build_display_messages(&mut display_messages, result.classification, msg, &main_chain_uuids);
     }
 
     // ---- 阶段 3：并行提取原始大小写搜索文本 ----
@@ -181,10 +208,12 @@ fn extract_usage(msg: &Value) -> Option<Value> {
 /// - `out` - 输出 DisplayMessage 列表
 /// - `classification` - 分类结果
 /// - `msg` - 原始消息 Value
+/// - `main_chain_uuids` - 主链 UUID 集合，用于判断是否遗弃消息
 fn build_display_messages(
     out: &mut Vec<DisplayMessage>,
     classification: Classification,
     msg: &Value,
+    main_chain_uuids: &HashSet<String>,
 ) {
     // 提取公共字段
     let uuid = msg
@@ -192,6 +221,8 @@ fn build_display_messages(
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
+    // UUID 为空的消息（元数据）不标记为遗弃
+    let is_abandoned = !uuid.is_empty() && !main_chain_uuids.contains(&uuid);
     let timestamp = msg
         .get("timestamp")
         .and_then(|v| v.as_str())
@@ -244,6 +275,7 @@ fn build_display_messages(
                 system_label: None,
                 plan_source_path: None,
                 cwd,
+                is_abandoned,
             });
         }
 
@@ -266,6 +298,7 @@ fn build_display_messages(
                 system_label: None,
                 plan_source_path: None,
                 cwd,
+                is_abandoned,
             });
         }
 
@@ -287,6 +320,7 @@ fn build_display_messages(
                 system_label: None,
                 plan_source_path: None,
                 cwd,
+                is_abandoned,
             });
         }
 
@@ -311,12 +345,13 @@ fn build_display_messages(
                 system_label: Some(label),
                 plan_source_path,
                 cwd,
+                is_abandoned,
             });
         }
 
         Classification::User => {
             // 普通 user 消息：拆分 tool_result 块
-            build_user_display_messages(out, &uuid, &timestamp, cwd, content_val);
+            build_user_display_messages(out, &uuid, &timestamp, cwd, content_val, is_abandoned);
         }
     }
 }
@@ -388,12 +423,14 @@ fn extract_text_from_content(content: Option<&Value>) -> String {
 /// - `timestamp` - 原始消息时间戳
 /// - `cwd` - 当前工作目录
 /// - `content` - `message.content` 的 Value
+/// - `is_abandoned` - 是否为遗弃消息
 fn build_user_display_messages(
     out: &mut Vec<DisplayMessage>,
     uuid: &str,
     timestamp: &str,
     cwd: Option<String>,
     content: Option<&Value>,
+    is_abandoned: bool,
 ) {
     match content {
         // 字符串格式：直接作为一条 user 消息
@@ -414,6 +451,7 @@ fn build_user_display_messages(
                 system_label: None,
                 plan_source_path: None,
                 cwd,
+                is_abandoned,
             });
         }
 
@@ -450,6 +488,7 @@ fn build_user_display_messages(
                     system_label: None,
                     plan_source_path: None,
                     cwd: cwd.clone(),
+                    is_abandoned,
                 });
             }
 
@@ -470,6 +509,7 @@ fn build_user_display_messages(
                     system_label: None,
                     plan_source_path: None,
                     cwd: cwd.clone(),
+                    is_abandoned,
                 });
             }
         }

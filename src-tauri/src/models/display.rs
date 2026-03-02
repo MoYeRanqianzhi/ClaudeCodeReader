@@ -82,6 +82,9 @@ pub struct DisplayMessage {
     /// 当前工作目录（该消息发送时 Claude Code 的工作目录路径）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
+    /// 是否为遗弃消息（不在主链上）
+    /// 主链 = 从 JSONL 最后一条消息沿 parentUuid 回溯到根的路径
+    pub is_abandoned: bool,
 }
 
 /// tool_use 块摘要信息
