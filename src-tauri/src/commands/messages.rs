@@ -19,7 +19,7 @@
 //! 写入操作始终从文件重新读取原始 `Vec<Value>`，经用户编辑后写回。
 //! 整个写入路径完全不经过 transformer，原始数据中不可能出现任何额外字段。
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use serde_json::Value;
 use tauri::State;
@@ -66,8 +66,9 @@ pub async fn read_session_messages(
 
 /// 删除指定的单条消息
 ///
-/// 根据消息 UUID 从会话文件中移除一条消息，然后将剩余消息重新保存到文件。
-/// 操作完成后重新 transform 并更新缓存，返回新的 TransformedSession。
+/// 根据消息 UUID 从会话文件中移除一条消息，并修复 parentUuid 链：
+/// 将原本指向被删除消息的子消息重新链接到被删除消息的父消息，
+/// 保持 Claude Code 对话树结构的连续性（A → [deleted B] → C 变为 A → C）。
 ///
 /// # 参数
 /// - `session_file_path` - 会话 JSONL 文件的绝对路径
@@ -88,8 +89,23 @@ pub async fn delete_message(
     // 从文件读取原始数据
     let messages = parser::read_messages(&session_file_path).await?;
 
+    // ---- 修复 parentUuid 链 ----
+    // 查找被删除消息的 parentUuid，用于将其子消息重新链接到其父消息。
+    // 若被删除消息是根消息（无 parentUuid 字段），则子消息将成为新的根（parentUuid = null）。
+    let deleted_parent = messages
+        .iter()
+        .find(|msg| {
+            msg.get("uuid")
+                .and_then(|v| v.as_str())
+                .map(|uuid| uuid == message_uuid.as_str())
+                .unwrap_or(false)
+        })
+        .and_then(|msg| msg.get("parentUuid"))
+        .cloned()
+        .unwrap_or(Value::Null);
+
     // 过滤掉目标消息（通过 uuid 字段匹配）
-    let filtered: Vec<Value> = messages
+    let mut filtered: Vec<Value> = messages
         .into_iter()
         .filter(|msg| {
             msg.get("uuid")
@@ -98,6 +114,22 @@ pub async fn delete_message(
                 .unwrap_or(true) // 没有 uuid 字段的消息保留
         })
         .collect();
+
+    // 将原本指向被删除消息的 parentUuid 更新为被删除消息的 parentUuid，
+    // 保持消息链的连续性。可能有多条消息指向同一个被删除消息（分支场景）。
+    for msg in filtered.iter_mut() {
+        let points_to_deleted = msg
+            .get("parentUuid")
+            .and_then(|v| v.as_str())
+            .map(|uuid| uuid == message_uuid.as_str())
+            .unwrap_or(false);
+
+        if points_to_deleted {
+            if let Some(obj) = msg.as_object_mut() {
+                obj.insert("parentUuid".to_string(), deleted_parent.clone());
+            }
+        }
+    }
 
     // 写回文件（通过 file_guard 安全写入）
     parser::write_messages(&session_file_path, &filtered, "delete_message", &cache).await?;
@@ -111,8 +143,13 @@ pub async fn delete_message(
 
 /// 批量删除多条消息
 ///
-/// 根据消息 UUID 列表从会话文件中移除多条消息。
+/// 根据消息 UUID 列表从会话文件中移除多条消息，并修复 parentUuid 链。
 /// 内部使用 HashSet 进行 O(1) 查找，保证批量删除的性能。
+///
+/// ## parentUuid 链修复（支持级联）
+/// 当连续多条消息被同时删除时（如 A → B → C → D 中删除 B 和 C），
+/// 需要沿被删除消息链向上查找最近的未被删除祖先，将 D 的 parentUuid
+/// 从 C 跳过整个被删除链，最终指向 A。
 ///
 /// # 参数
 /// - `session_file_path` - 会话 JSONL 文件的绝对路径
@@ -139,7 +176,24 @@ pub async fn delete_messages(
     // 将 UUID 列表转换为 HashSet，实现 O(1) 查找
     let uuid_set: HashSet<&str> = message_uuids.iter().map(|s| s.as_str()).collect();
 
-    let filtered: Vec<Value> = messages
+    // ---- 修复 parentUuid 链（支持级联） ----
+    // 构建被删除消息的 uuid → parentUuid 映射表。
+    // 用于在删除后将子消息的 parentUuid 重新链接到最近的未被删除祖先。
+    let deleted_parent_map: HashMap<String, Value> = messages
+        .iter()
+        .filter_map(|msg| {
+            let uuid = msg.get("uuid").and_then(|v| v.as_str())?;
+            if uuid_set.contains(uuid) {
+                let parent = msg.get("parentUuid").cloned().unwrap_or(Value::Null);
+                Some((uuid.to_string(), parent))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // 过滤掉目标消息
+    let mut filtered: Vec<Value> = messages
         .into_iter()
         .filter(|msg| {
             msg.get("uuid")
@@ -148,6 +202,38 @@ pub async fn delete_messages(
                 .unwrap_or(true)
         })
         .collect();
+
+    // 修复 parentUuid 链：对于每条剩余消息，如果其 parentUuid 指向被删除的消息，
+    // 沿着被删除消息链向上查找，直到找到未被删除的祖先（或到达根 null）。
+    for msg in filtered.iter_mut() {
+        let parent_uuid = msg
+            .get("parentUuid")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        if let Some(current) = parent_uuid {
+            if deleted_parent_map.contains_key(&current) {
+                // 该消息的 parent 被删除了，沿链向上找到最近的未被删除祖先
+                let mut ancestor = deleted_parent_map[&current].clone();
+                // 防御性循环上限，避免异常数据（循环引用）导致无限循环
+                let mut guard = 0;
+                while let Some(next_uuid) = ancestor.as_str() {
+                    if let Some(next_parent) = deleted_parent_map.get(next_uuid) {
+                        ancestor = next_parent.clone();
+                        guard += 1;
+                        if guard > 10_000 {
+                            break;
+                        }
+                    } else {
+                        break; // next_uuid 不在被删除集合中 → 找到了存活的祖先
+                    }
+                }
+                if let Some(obj) = msg.as_object_mut() {
+                    obj.insert("parentUuid".to_string(), ancestor);
+                }
+            }
+        }
+    }
 
     parser::write_messages(&session_file_path, &filtered, "delete_messages", &cache).await?;
 
