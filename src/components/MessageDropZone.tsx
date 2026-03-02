@@ -11,7 +11,7 @@
  * `isDragging === false` 时返回 null，避免 flex gap 污染。
  */
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { Plus } from 'lucide-react';
 
@@ -43,6 +43,20 @@ interface MessageDropZoneProps {
 export function MessageDropZone({ afterUuid, isDragging }: MessageDropZoneProps) {
   const [isOver, setIsOver] = useState(false);
   const [, setDragCounter] = useState(0);
+
+  /**
+   * isDragging 变为 false 时重置内部状态。
+   *
+   * 原因：drop 事件触发在父级滚动容器上，DropZone 自身的 dragLeave 不会触发，
+   * 导致 isOver 和 dragCounter 脏数据残留。下次 isDragging=true 时
+   * 组件会以旧的 isOver=true 状态渲染，表现为"虚影始终出现"。
+   */
+  useEffect(() => {
+    if (!isDragging) {
+      setIsOver(false);
+      setDragCounter(0);
+    }
+  }, [isDragging]);
 
   const handleDragEnter = useCallback((e: React.DragEvent) => {
     e.preventDefault();
