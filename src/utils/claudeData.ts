@@ -46,7 +46,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core';
-import type { ClaudeSettings, Project, HistoryEntry, EnvSwitcherConfig, EnvProfile, TransformedSession, ResumeConfig, BackupConfig, FixDefinition, FixResult, ProxyStatus, ProxyMode, InterceptAction, ProxyRecord, ProxyRecordDetail } from '../types/claude';
+import type { ClaudeSettings, Project, HistoryEntry, EnvSwitcherConfig, EnvProfile, TransformedSession, ResumeConfig, BackupConfig, FixDefinition, FixResult, ProxyStatus, ProxyMode, InterceptAction, InterceptResponseAction, ProxyRecord, ProxyRecordDetail } from '../types/claude';
 
 // ============ 路径工具函数 ============
 
@@ -612,6 +612,15 @@ export async function setProxyMode(mode: ProxyMode): Promise<void> {
  */
 export async function resolveIntercept(id: number, action: InterceptAction): Promise<void> {
   return invoke<void>('resolve_intercept', { id, action });
+}
+
+/**
+ * 处理响应拦截决策
+ *
+ * 在拦截模式下，上游响应到达后，用户对响应做出放行/修改/丢弃决策。
+ */
+export async function resolveResponseIntercept(id: number, action: InterceptResponseAction): Promise<void> {
+  return invoke<void>('resolve_response_intercept', { id, action });
 }
 
 /**

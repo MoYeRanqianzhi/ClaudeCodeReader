@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use tokio::sync::oneshot;
 
-use crate::models::proxy::InterceptAction;
+use crate::models::proxy::{InterceptAction, InterceptResponseAction};
 
 /// 默认拦截超时时间（秒）
 const DEFAULT_TIMEOUT_SECS: u64 = 60;
@@ -26,13 +26,21 @@ struct PendingIntercept {
     sender: oneshot::Sender<InterceptAction>,
 }
 
+/// 一个待处理的响应拦截
+struct PendingResponseIntercept {
+    /// 决策发送端
+    sender: oneshot::Sender<InterceptResponseAction>,
+}
+
 /// 拦截器管理器
 ///
-/// 管理所有待处理的拦截请求。线程安全。
+/// 管理所有待处理的拦截请求（请求阶段和响应阶段）。线程安全。
 #[derive(Clone)]
 pub struct Interceptor {
-    /// 待处理的拦截：record_id → PendingIntercept
+    /// 待处理的请求拦截：record_id → PendingIntercept
     pending: Arc<Mutex<HashMap<u64, PendingIntercept>>>,
+    /// 待处理的响应拦截：record_id → PendingResponseIntercept
+    pending_response: Arc<Mutex<HashMap<u64, PendingResponseIntercept>>>,
     /// 超时时间（秒）
     timeout_secs: u64,
 }
@@ -42,6 +50,7 @@ impl Interceptor {
     pub fn new() -> Self {
         Self {
             pending: Arc::new(Mutex::new(HashMap::new())),
+            pending_response: Arc::new(Mutex::new(HashMap::new())),
             timeout_secs: DEFAULT_TIMEOUT_SECS,
         }
     }
@@ -103,11 +112,6 @@ impl Interceptor {
         }
     }
 
-    /// 获取当前待处理的拦截数量
-    pub fn pending_count(&self) -> usize {
-        self.pending.lock().unwrap().len()
-    }
-
     /// 清理指定 ID 的待处理拦截
     fn cleanup(&self, record_id: u64) {
         let mut pending = self.pending.lock().unwrap();
@@ -123,5 +127,80 @@ impl Interceptor {
         for (_, intercept) in pending.drain() {
             let _ = intercept.sender.send(InterceptAction::Forward);
         }
+        // 同时清空响应拦截
+        let mut pending_resp = self.pending_response.lock().unwrap();
+        for (_, intercept) in pending_resp.drain() {
+            let _ = intercept.sender.send(InterceptResponseAction::Forward);
+        }
+    }
+
+    // ============ 响应拦截 ============
+
+    /// 创建一个响应阶段的拦截等待
+    ///
+    /// 在请求放行/修改放行后、上游响应到达时调用。
+    /// 返回 receiver，handler 通过 `await` 等待用户对响应的决策。
+    pub fn create_response_intercept(
+        &self,
+        record_id: u64,
+    ) -> oneshot::Receiver<InterceptResponseAction> {
+        let (sender, receiver) = oneshot::channel();
+        let mut pending = self.pending_response.lock().unwrap();
+        pending.insert(record_id, PendingResponseIntercept { sender });
+        receiver
+    }
+
+    /// 解决一个响应拦截请求（前端调用）
+    pub fn resolve_response(
+        &self,
+        record_id: u64,
+        action: InterceptResponseAction,
+    ) -> bool {
+        let mut pending = self.pending_response.lock().unwrap();
+        if let Some(intercept) = pending.remove(&record_id) {
+            let _ = intercept.sender.send(action);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// 等待响应拦截决策（带超时）
+    pub async fn wait_for_response_decision(
+        &self,
+        record_id: u64,
+        receiver: oneshot::Receiver<InterceptResponseAction>,
+    ) -> InterceptResponseAction {
+        let timeout = Duration::from_secs(self.timeout_secs);
+
+        match tokio::time::timeout(timeout, receiver).await {
+            Ok(Ok(action)) => action,
+            Ok(Err(_)) => {
+                self.cleanup_response(record_id);
+                InterceptResponseAction::Forward
+            }
+            Err(_) => {
+                log::warn!(
+                    "响应拦截 {} 超时（{}s），自动放行",
+                    record_id,
+                    self.timeout_secs
+                );
+                self.cleanup_response(record_id);
+                InterceptResponseAction::Forward
+            }
+        }
+    }
+
+    /// 获取当前待处理的拦截数量（请求 + 响应）
+    pub fn pending_count(&self) -> usize {
+        let req_count = self.pending.lock().unwrap().len();
+        let resp_count = self.pending_response.lock().unwrap().len();
+        req_count + resp_count
+    }
+
+    /// 清理指定 ID 的待处理响应拦截
+    fn cleanup_response(&self, record_id: u64) {
+        let mut pending = self.pending_response.lock().unwrap();
+        pending.remove(&record_id);
     }
 }

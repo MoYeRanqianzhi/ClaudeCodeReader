@@ -685,7 +685,7 @@ export interface ProxyStatus {
  *
  * 对应 Rust 后端 `models::proxy::RecordStatus` 枚举。
  */
-export type RecordStatus = 'pending' | 'intercepted' | 'completed' | 'dropped' | 'error';
+export type RecordStatus = 'pending' | 'intercepted' | 'responseIntercepted' | 'completed' | 'dropped' | 'error';
 
 /**
  * 代理记录摘要
@@ -741,3 +741,14 @@ export type InterceptAction =
   | { type: 'forwardModified'; headers?: Record<string, string>; body?: string }
   | { type: 'drop'; statusCode: number }
   | { type: 'mockResponse'; statusCode: number; headers: Record<string, string>; body: string };
+
+/**
+ * 响应拦截决策
+ *
+ * 在拦截模式下，上游响应到达后，用户对响应做出的处理决策。
+ * 对应 Rust 后端 `models::proxy::InterceptResponseAction` 枚举。
+ */
+export type InterceptResponseAction =
+  | { type: 'forward' }
+  | { type: 'forwardModified'; headers?: Record<string, string>; body?: string }
+  | { type: 'drop'; statusCode: number };

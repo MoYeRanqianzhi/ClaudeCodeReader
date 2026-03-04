@@ -23,7 +23,7 @@ use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 
-use crate::models::proxy::{InterceptAction, ProxyMode};
+use crate::models::proxy::{InterceptAction, InterceptResponseAction, ProxyMode};
 use crate::services::proxy::forwarder;
 use crate::services::proxy::interceptor::Interceptor;
 use crate::services::proxy::recorder::Recorder;
@@ -325,9 +325,117 @@ async fn handle_request(
         Ok(result) => {
             let duration = start_time.elapsed().as_millis() as u64;
 
-            // 记录响应
+            // === 拦截模式：响应拦截阶段 ===
+            // 请求已成功转发并收到上游响应，暂停等待用户对响应的决策
+            if mode == ProxyMode::Intercept {
+                // 保存响应数据并标记为"响应拦截中"
+                state.recorder.mark_response_intercepted(
+                    record_id,
+                    result.status,
+                    duration,
+                    result.headers.clone(),
+                    Some(result.body.clone()),
+                );
+
+                // 发送响应拦截事件到前端
+                emit_event(
+                    &state,
+                    "proxy:response-intercept",
+                    &serde_json::json!({
+                        "id": record_id,
+                        "status": result.status,
+                        "durationMs": duration,
+                        "size": result.body.len(),
+                        "headers": &result.headers,
+                        "body": &result.body,
+                    }),
+                );
+
+                // 创建响应拦截并等待用户决策
+                let resp_receiver = state.interceptor.create_response_intercept(record_id);
+                let resp_action = state
+                    .interceptor
+                    .wait_for_response_decision(record_id, resp_receiver)
+                    .await;
+
+                return match resp_action {
+                    InterceptResponseAction::Forward => {
+                        // 放行原样响应
+                        state.recorder.record_response(
+                            record_id,
+                            result.status,
+                            duration,
+                            result.headers.clone(),
+                            Some(result.body.clone()),
+                        );
+                        emit_event(
+                            &state,
+                            "proxy:response",
+                            &serde_json::json!({
+                                "id": record_id,
+                                "status": result.status,
+                                "durationMs": duration,
+                                "size": result.body.len(),
+                            }),
+                        );
+                        match forwarder::build_response(
+                            result.status,
+                            &result.headers,
+                            &result.body,
+                        ) {
+                            Ok(resp) => Ok(resp),
+                            Err(_) => Ok(forwarder::build_error_response(502, "构建转发响应失败")),
+                        }
+                    }
+                    InterceptResponseAction::ForwardModified {
+                        headers: mod_headers,
+                        body: mod_body,
+                    } => {
+                        // 修改后放行
+                        let final_resp_headers =
+                            mod_headers.unwrap_or_else(|| result.headers.clone());
+                        let final_resp_body =
+                            mod_body.unwrap_or_else(|| result.body.clone());
+                        state.recorder.record_response(
+                            record_id,
+                            result.status,
+                            duration,
+                            final_resp_headers.clone(),
+                            Some(final_resp_body.clone()),
+                        );
+                        emit_event(
+                            &state,
+                            "proxy:response",
+                            &serde_json::json!({
+                                "id": record_id,
+                                "status": result.status,
+                                "durationMs": duration,
+                                "size": final_resp_body.len(),
+                            }),
+                        );
+                        match forwarder::build_response(
+                            result.status,
+                            &final_resp_headers,
+                            &final_resp_body,
+                        ) {
+                            Ok(resp) => Ok(resp),
+                            Err(_) => Ok(forwarder::build_error_response(502, "构建修改响应失败")),
+                        }
+                    }
+                    InterceptResponseAction::Drop { status_code } => {
+                        // 丢弃响应：返回错误给 Claude Code
+                        state.recorder.mark_dropped(record_id);
+                        Ok(forwarder::build_error_response(
+                            status_code,
+                            "响应被代理拦截并丢弃",
+                        ))
+                    }
+                };
+            }
+
+            // === 非拦截模式：正常处理 ===
             let resp_body = match mode {
-                ProxyMode::Overview => None, // 总览模式不记录响应 body
+                ProxyMode::Overview => None,
                 _ => Some(result.body.clone()),
             };
             state.recorder.record_response(

@@ -33,7 +33,8 @@ import type {
 } from '../types/claude';
 import {
   startProxy, stopProxy, getProxyStatus, setProxyMode,
-  resolveIntercept, getProxyRecords, getRecordDetail,
+  resolveIntercept, resolveResponseIntercept,
+  getProxyRecords, getRecordDetail,
   clearProxyRecords, exportProxyRecords,
 } from '../utils/claudeData';
 
@@ -55,6 +56,7 @@ const MODE_CONFIG: Record<ProxyMode, { label: string; icon: typeof Radio; desc: 
 const STATUS_CONFIG: Record<RecordStatus, { color: string; label: string }> = {
   pending: { color: 'text-yellow-500', label: '等待中' },
   intercepted: { color: 'text-orange-500', label: '已拦截' },
+  responseIntercepted: { color: 'text-purple-500', label: '响应拦截' },
   completed: { color: 'text-green-500', label: '已完成' },
   dropped: { color: 'text-red-500', label: '已丢弃' },
   error: { color: 'text-destructive', label: '错误' },
@@ -112,16 +114,35 @@ type DetailTab = 'headers' | 'body' | 'raw';
 
 /**
  * 详情面板组件
- * 显示选中请求的完整 Headers、Body 和 Raw 数据
+ * 显示选中请求的完整 Headers、Body 和 Raw 数据。
+ * 在拦截/响应拦截状态下，Body 变为可编辑 textarea 并显示决策按钮。
  */
 const DetailPanel = memo(function DetailPanel({
   detail,
   loading,
+  onResolveRequest,
+  onResolveResponse,
 }: {
   detail: ProxyRecordDetail | null;
   loading: boolean;
+  /** 请求拦截决策回调 */
+  onResolveRequest: (id: number, action: 'forward' | 'forwardModified' | 'drop', editedBody?: string) => void;
+  /** 响应拦截决策回调 */
+  onResolveResponse: (id: number, action: 'forward' | 'forwardModified' | 'drop', editedBody?: string) => void;
 }) {
   const [activeTab, setActiveTab] = useState<DetailTab>('headers');
+  /** 请求 Body 编辑内容（拦截时可修改） */
+  const [editedRequestBody, setEditedRequestBody] = useState('');
+  /** 响应 Body 编辑内容（响应拦截时可修改） */
+  const [editedResponseBody, setEditedResponseBody] = useState('');
+
+  // 当选中记录变化时，同步编辑内容
+  useEffect(() => {
+    if (detail) {
+      setEditedRequestBody(detail.requestBody ?? '');
+      setEditedResponseBody(detail.responseBody ?? '');
+    }
+  }, [detail?.summary.id, detail?.requestBody, detail?.responseBody]);
 
   if (loading) {
     return (
@@ -140,6 +161,10 @@ const DetailPanel = memo(function DetailPanel({
       </div>
     );
   }
+
+  const isRequestIntercepted = detail.summary.status === 'intercepted';
+  const isResponseIntercepted = detail.summary.status === 'responseIntercepted';
+  const isEditable = isRequestIntercepted || isResponseIntercepted;
 
   const tabs: { key: DetailTab; label: string }[] = [
     { key: 'headers', label: 'Headers' },
@@ -175,6 +200,16 @@ const DetailPanel = memo(function DetailPanel({
               {detail.summary.statusCode}
             </span>
           )}
+          {/* 拦截状态标记 */}
+          {isEditable && (
+            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+              isRequestIntercepted
+                ? 'bg-orange-500/15 text-orange-600 dark:text-orange-400'
+                : 'bg-purple-500/15 text-purple-600 dark:text-purple-400'
+            }`}>
+              {isRequestIntercepted ? '请求拦截中' : '响应拦截中'}
+            </span>
+          )}
         </div>
       </div>
 
@@ -204,24 +239,48 @@ const DetailPanel = memo(function DetailPanel({
         {activeTab === 'body' && (
           <div className="space-y-4">
             {/* 请求 Body */}
-            {detail.requestBody && (
-              <div>
-                <h4 className="text-xs font-semibold text-muted-foreground uppercase mb-2">
-                  请求 Body
-                </h4>
+            <div>
+              <h4 className="text-xs font-semibold text-muted-foreground uppercase mb-2">
+                请求 Body
+                {isRequestIntercepted && (
+                  <span className="ml-2 text-orange-500 normal-case font-normal">（可编辑）</span>
+                )}
+              </h4>
+              {isRequestIntercepted ? (
+                <textarea
+                  value={editedRequestBody}
+                  onChange={e => setEditedRequestBody(e.target.value)}
+                  className="w-full h-[300px] bg-muted/50 rounded-lg p-3 text-xs font-mono resize-y border border-orange-500/30 focus:border-orange-500 focus:outline-none focus:ring-1 focus:ring-orange-500/50"
+                  spellCheck={false}
+                />
+              ) : detail.requestBody ? (
                 <JsonBlock content={detail.requestBody} />
-              </div>
-            )}
+              ) : (
+                <p className="text-muted-foreground text-xs">无请求 Body</p>
+              )}
+            </div>
             {/* 响应 Body */}
-            {detail.responseBody && (
+            {(isResponseIntercepted || detail.responseBody) && (
               <div>
                 <h4 className="text-xs font-semibold text-muted-foreground uppercase mb-2">
                   响应 Body
+                  {isResponseIntercepted && (
+                    <span className="ml-2 text-purple-500 normal-case font-normal">（可编辑）</span>
+                  )}
                 </h4>
-                <JsonBlock content={detail.responseBody} />
+                {isResponseIntercepted ? (
+                  <textarea
+                    value={editedResponseBody}
+                    onChange={e => setEditedResponseBody(e.target.value)}
+                    className="w-full h-[300px] bg-muted/50 rounded-lg p-3 text-xs font-mono resize-y border border-purple-500/30 focus:border-purple-500 focus:outline-none focus:ring-1 focus:ring-purple-500/50"
+                    spellCheck={false}
+                  />
+                ) : detail.responseBody ? (
+                  <JsonBlock content={detail.responseBody} />
+                ) : null}
               </div>
             )}
-            {!detail.requestBody && !detail.responseBody && (
+            {!detail.requestBody && !detail.responseBody && !isEditable && (
               <p className="text-muted-foreground text-sm">无 Body 数据（总览模式不记录 Body）</p>
             )}
           </div>
@@ -264,6 +323,85 @@ const DetailPanel = memo(function DetailPanel({
           </div>
         )}
       </div>
+
+      {/* ======== 详情面板底部：拦截决策按钮 ======== */}
+      {isRequestIntercepted && (
+        <div className="border-t border-border p-3 bg-card shrink-0">
+          <div className="flex items-center gap-2">
+            <Shield className="w-4 h-4 text-orange-500" />
+            <span className="text-xs font-medium text-muted-foreground">请求拦截决策</span>
+            <div className="flex-1" />
+            <motion.button
+              onClick={() => onResolveRequest(detail.summary.id, 'forward')}
+              className="px-3 py-1.5 rounded text-xs font-medium bg-green-500/15 text-green-600 dark:text-green-400 hover:bg-green-500/25 transition-colors flex items-center gap-1"
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+            >
+              <Check className="w-3 h-3" />
+              放行
+            </motion.button>
+            {editedRequestBody !== (detail.requestBody ?? '') && (
+              <motion.button
+                onClick={() => onResolveRequest(detail.summary.id, 'forwardModified', editedRequestBody)}
+                className="px-3 py-1.5 rounded text-xs font-medium bg-blue-500/15 text-blue-600 dark:text-blue-400 hover:bg-blue-500/25 transition-colors flex items-center gap-1"
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
+              >
+                <ArrowRight className="w-3 h-3" />
+                修改放行
+              </motion.button>
+            )}
+            <motion.button
+              onClick={() => onResolveRequest(detail.summary.id, 'drop')}
+              className="px-3 py-1.5 rounded text-xs font-medium bg-red-500/15 text-red-600 dark:text-red-400 hover:bg-red-500/25 transition-colors flex items-center gap-1"
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+            >
+              <X className="w-3 h-3" />
+              丢弃
+            </motion.button>
+          </div>
+        </div>
+      )}
+
+      {isResponseIntercepted && (
+        <div className="border-t border-border p-3 bg-card shrink-0">
+          <div className="flex items-center gap-2">
+            <Shield className="w-4 h-4 text-purple-500" />
+            <span className="text-xs font-medium text-muted-foreground">响应拦截决策</span>
+            <div className="flex-1" />
+            <motion.button
+              onClick={() => onResolveResponse(detail.summary.id, 'forward')}
+              className="px-3 py-1.5 rounded text-xs font-medium bg-green-500/15 text-green-600 dark:text-green-400 hover:bg-green-500/25 transition-colors flex items-center gap-1"
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+            >
+              <Check className="w-3 h-3" />
+              放行
+            </motion.button>
+            {editedResponseBody !== (detail.responseBody ?? '') && (
+              <motion.button
+                onClick={() => onResolveResponse(detail.summary.id, 'forwardModified', editedResponseBody)}
+                className="px-3 py-1.5 rounded text-xs font-medium bg-blue-500/15 text-blue-600 dark:text-blue-400 hover:bg-blue-500/25 transition-colors flex items-center gap-1"
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
+              >
+                <ArrowRight className="w-3 h-3" />
+                修改放行
+              </motion.button>
+            )}
+            <motion.button
+              onClick={() => onResolveResponse(detail.summary.id, 'drop')}
+              className="px-3 py-1.5 rounded text-xs font-medium bg-red-500/15 text-red-600 dark:text-red-400 hover:bg-red-500/25 transition-colors flex items-center gap-1"
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+            >
+              <X className="w-3 h-3" />
+              丢弃
+            </motion.button>
+          </div>
+        </div>
+      )}
     </div>
   );
 });
@@ -371,6 +509,14 @@ export const ProxyPanel = memo(function ProxyPanel({
   // ---- refs ----
   /** 轮询定时器 */
   const pollTimerRef = useRef<ReturnType<typeof setInterval>>(null);
+  /**
+   * 正在解决中的记录 ID 集合
+   * 用于防止 refreshRecords/事件回调 覆盖乐观更新的状态。
+   * 当用户点击放行/丢弃后，该 ID 被加入集合；
+   * refreshRecords 获取后端数据时，如果记录已不在 intercepted/responseIntercepted 状态，
+   * 则从集合中移除并使用后端数据。
+   */
+  const resolvingIdsRef = useRef<Set<number>>(new Set());
 
   // ============ 初始化：获取当前代理状态 ============
 
@@ -410,6 +556,13 @@ export const ProxyPanel = memo(function ProxyPanel({
         refreshStatus();
       });
       unlisteners.push(unlisten3);
+
+      // proxy:response-intercept 事件：上游响应到达，进入响应拦截
+      const unlisten4 = await listen('proxy:response-intercept', () => {
+        refreshRecords();
+        refreshStatus();
+      });
+      unlisteners.push(unlisten4);
     };
 
     setup();
@@ -446,11 +599,31 @@ export const ProxyPanel = memo(function ProxyPanel({
 
   // ============ 操作函数 ============
 
-  /** 刷新记录列表 */
+  /** 刷新记录列表（保护正在解决中的记录状态） */
   const refreshRecords = useCallback(async () => {
     try {
       const recs = await getProxyRecords(0, RECORDS_PAGE_SIZE);
-      setRecords(recs);
+      setRecords(prev => {
+        const resolving = resolvingIdsRef.current;
+        if (resolving.size === 0) return recs;
+
+        // 合并：对于正在解决中的记录，保留乐观状态；
+        // 如果后端已更新为非拦截状态，说明解决完成，移除保护
+        const prevMap = new Map(prev.map(r => [r.id, r]));
+        return recs.map(r => {
+          if (resolving.has(r.id)) {
+            if (r.status !== 'intercepted' && r.status !== 'responseIntercepted') {
+              // 后端已更新，解除保护
+              resolving.delete(r.id);
+              return r;
+            }
+            // 后端还是拦截状态，但我们已经乐观更新了，保留乐观状态
+            const optimistic = prevMap.get(r.id);
+            return optimistic ?? r;
+          }
+          return r;
+        });
+      });
     } catch {
       // 静默失败
     }
@@ -563,9 +736,11 @@ export const ProxyPanel = memo(function ProxyPanel({
    * 乐观更新：立即将指定记录从"已拦截"状态移除
    *
    * 点击放行/丢弃后，先更新本地 UI（按钮立刻消失），
-   * 再异步调用后端。即使后端失败也不回滚（下次轮询会自动纠正）。
+   * 再异步调用后端。通过 resolvingIdsRef 防止后续 refreshRecords 覆盖。
    */
   const optimisticResolve = useCallback((id: number, newStatus: RecordStatus) => {
+    // 将 ID 加入保护集合，防止 refreshRecords 覆盖
+    resolvingIdsRef.current.add(id);
     setRecords(prev => prev.map(r =>
       r.id === id ? { ...r, status: newStatus } : r
     ));
@@ -603,10 +778,82 @@ export const ProxyPanel = memo(function ProxyPanel({
     refreshStatus();
   }, [optimisticResolve, refreshRecords, refreshStatus]);
 
+  /**
+   * 详情面板请求拦截决策回调
+   * 支持放行、修改放行、丢弃三种操作
+   */
+  const handleDetailResolveRequest = useCallback(async (
+    id: number,
+    action: 'forward' | 'forwardModified' | 'drop',
+    editedBody?: string,
+  ) => {
+    if (action === 'forward') {
+      optimisticResolve(id, 'pending');
+      try {
+        await resolveIntercept(id, { type: 'forward' });
+      } catch (err) {
+        setErrorMsg(`放行失败: ${err}`);
+      }
+    } else if (action === 'forwardModified') {
+      optimisticResolve(id, 'pending');
+      try {
+        await resolveIntercept(id, { type: 'forwardModified', body: editedBody });
+      } catch (err) {
+        setErrorMsg(`修改放行失败: ${err}`);
+      }
+    } else {
+      optimisticResolve(id, 'dropped');
+      try {
+        await resolveIntercept(id, { type: 'drop', statusCode: 403 });
+      } catch (err) {
+        setErrorMsg(`丢弃失败: ${err}`);
+      }
+    }
+    refreshRecords();
+    refreshStatus();
+  }, [optimisticResolve, refreshRecords, refreshStatus]);
+
+  /**
+   * 详情面板响应拦截决策回调
+   * 支持放行、修改放行、丢弃三种操作
+   */
+  const handleDetailResolveResponse = useCallback(async (
+    id: number,
+    action: 'forward' | 'forwardModified' | 'drop',
+    editedBody?: string,
+  ) => {
+    if (action === 'forward') {
+      optimisticResolve(id, 'completed');
+      try {
+        await resolveResponseIntercept(id, { type: 'forward' });
+      } catch (err) {
+        setErrorMsg(`响应放行失败: ${err}`);
+      }
+    } else if (action === 'forwardModified') {
+      optimisticResolve(id, 'completed');
+      try {
+        await resolveResponseIntercept(id, { type: 'forwardModified', body: editedBody });
+      } catch (err) {
+        setErrorMsg(`响应修改放行失败: ${err}`);
+      }
+    } else {
+      optimisticResolve(id, 'dropped');
+      try {
+        await resolveResponseIntercept(id, { type: 'drop', statusCode: 502 });
+      } catch (err) {
+        setErrorMsg(`响应丢弃失败: ${err}`);
+      }
+    }
+    refreshRecords();
+    refreshStatus();
+  }, [optimisticResolve, refreshRecords, refreshStatus]);
+
   // ============ 渲染 ============
 
-  /** 待处理的拦截请求 */
-  const interceptedRecords = records.filter(r => r.status === 'intercepted');
+  /** 待处理的拦截请求（包括请求拦截和响应拦截） */
+  const interceptedRecords = records.filter(
+    r => r.status === 'intercepted' || r.status === 'responseIntercepted'
+  );
 
   return (
     <div className="flex-1 flex flex-col bg-background min-w-0">
@@ -856,7 +1103,12 @@ export const ProxyPanel = memo(function ProxyPanel({
         </div>
 
         {/* 右侧：详情面板 */}
-        <DetailPanel detail={selectedDetail} loading={detailLoading} />
+        <DetailPanel
+          detail={selectedDetail}
+          loading={detailLoading}
+          onResolveRequest={handleDetailResolveRequest}
+          onResolveResponse={handleDetailResolveResponse}
+        />
       </div>
 
       {/* ======== 拦截决策栏（仅拦截模式且有待处理请求时显示） ======== */}
@@ -885,10 +1137,21 @@ export const ProxyPanel = memo(function ProxyPanel({
                     <span className="text-xs font-mono text-muted-foreground truncate flex-1">
                       {record.url}
                     </span>
+                    {/* 拦截阶段标识 */}
+                    <span className={`text-xs font-medium shrink-0 ${
+                      record.status === 'responseIntercepted'
+                        ? 'text-purple-500'
+                        : 'text-orange-500'
+                    }`}>
+                      {record.status === 'responseIntercepted' ? '响应' : '请求'}
+                    </span>
                     {/* 决策按钮组 */}
                     <div className="flex items-center gap-1.5 shrink-0">
                       <motion.button
-                        onClick={() => handleForward(record.id)}
+                        onClick={() => record.status === 'responseIntercepted'
+                          ? handleDetailResolveResponse(record.id, 'forward')
+                          : handleForward(record.id)
+                        }
                         className="px-2.5 py-1 rounded text-xs font-medium bg-green-500/15 text-green-600 dark:text-green-400 hover:bg-green-500/25 transition-colors flex items-center gap-1"
                         whileHover={{ scale: 1.05 }}
                         whileTap={{ scale: 0.95 }}
@@ -898,11 +1161,14 @@ export const ProxyPanel = memo(function ProxyPanel({
                         放行
                       </motion.button>
                       <motion.button
-                        onClick={() => handleDrop(record.id)}
+                        onClick={() => record.status === 'responseIntercepted'
+                          ? handleDetailResolveResponse(record.id, 'drop')
+                          : handleDrop(record.id)
+                        }
                         className="px-2.5 py-1 rounded text-xs font-medium bg-red-500/15 text-red-600 dark:text-red-400 hover:bg-red-500/25 transition-colors flex items-center gap-1"
                         whileHover={{ scale: 1.05 }}
                         whileTap={{ scale: 0.95 }}
-                        title="丢弃请求（返回 403）"
+                        title={record.status === 'responseIntercepted' ? '丢弃响应（返回 502）' : '丢弃请求（返回 403）'}
                       >
                         <X className="w-3 h-3" />
                         丢弃

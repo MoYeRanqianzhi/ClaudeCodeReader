@@ -93,6 +93,30 @@ impl Recorder {
         }
     }
 
+    /// 更新记录状态为"响应拦截中"
+    ///
+    /// 在拦截模式下，请求已转发到上游并收到响应，等待用户对响应的决策。
+    /// 同时保存响应数据供前端查看/编辑。
+    pub fn mark_response_intercepted(
+        &self,
+        id: u64,
+        status_code: u16,
+        duration_ms: u64,
+        headers: HashMap<String, String>,
+        body: Option<String>,
+    ) {
+        let mut entries = self.entries.lock().unwrap();
+        if let Some(entry) = entries.iter_mut().find(|e| e.summary.id == id) {
+            let response_size = body.as_ref().map(|b| b.len() as u64);
+            entry.summary.status = RecordStatus::ResponseIntercepted;
+            entry.summary.status_code = Some(status_code);
+            entry.summary.duration_ms = Some(duration_ms);
+            entry.summary.response_size = response_size;
+            entry.response_headers = headers;
+            entry.response_body = body;
+        }
+    }
+
     /// 记录响应完成
     pub fn record_response(
         &self,

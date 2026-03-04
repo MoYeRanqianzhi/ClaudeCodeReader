@@ -73,8 +73,10 @@ pub struct ProxyRecord {
 pub enum RecordStatus {
     /// 请求进行中（等待上游响应）
     Pending,
-    /// 等待用户拦截决策
+    /// 等待用户拦截决策（请求阶段）
     Intercepted,
+    /// 等待用户拦截决策（响应阶段：上游已返回，等待用户决定如何回传给 CC）
+    ResponseIntercepted,
     /// 请求已完成
     Completed,
     /// 请求被用户丢弃
@@ -155,19 +157,23 @@ pub struct ProxyStateFile {
 
 /// 拦截响应决策
 ///
-/// 前端用户对拦截到的响应做出的决策。
-/// 注意：此枚举预留用于未来的响应拦截功能，当前尚未接入请求处理流程。
+/// 前端用户对拦截到的上游响应做出的决策。
+/// 在拦截模式下，请求转发到上游后收到响应，暂停等待用户决策。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "type")]
-#[allow(dead_code)]
 pub enum InterceptResponseAction {
-    /// 放行原样：不修改响应内容
+    /// 放行原样：不修改响应内容，直接返回给 Claude Code
     Forward,
-    /// 修改后放行：使用修改后的 headers 和 body
+    /// 修改后放行：使用修改后的 headers 和 body 返回
     ForwardModified {
         /// 修改后的响应 headers
         headers: Option<HashMap<String, String>>,
         /// 修改后的响应 body
         body: Option<String>,
+    },
+    /// 丢弃响应：不返回上游响应，给 Claude Code 返回错误
+    Drop {
+        /// 返回给客户端的 HTTP 状态码
+        status_code: u16,
     },
 }

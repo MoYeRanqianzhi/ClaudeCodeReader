@@ -103,6 +103,7 @@ pub fn run() {
             commands::proxy::get_proxy_status,
             commands::proxy::set_proxy_mode,
             commands::proxy::resolve_intercept,
+            commands::proxy::resolve_response_intercept,
             commands::proxy::get_proxy_records,
             commands::proxy::get_record_detail,
             commands::proxy::clear_proxy_records,

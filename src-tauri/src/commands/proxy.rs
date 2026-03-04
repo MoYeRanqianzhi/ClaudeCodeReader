@@ -13,7 +13,8 @@ use std::sync::Mutex;
 use tauri::{AppHandle, State};
 
 use crate::models::proxy::{
-    InterceptAction, ProxyMode, ProxyRecord, ProxyRecordDetail, ProxyStatus,
+    InterceptAction, InterceptResponseAction, ProxyMode, ProxyRecord, ProxyRecordDetail,
+    ProxyStatus,
 };
 use crate::services::proxy::{config_guard, server::ProxyServer};
 
@@ -196,6 +197,28 @@ pub async fn resolve_intercept(
                 Ok(())
             } else {
                 Err(format!("拦截请求 {} 不存在或已超时", id))
+            }
+        }
+        None => Err("代理未运行".to_string()),
+    }
+}
+
+/// 处理响应拦截决策
+///
+/// 前端用户在拦截模式下对上游响应做出决策（放行/修改/丢弃）。
+#[tauri::command]
+pub async fn resolve_response_intercept(
+    id: u64,
+    action: InterceptResponseAction,
+    proxy_state: State<'_, ProxyState>,
+) -> Result<(), String> {
+    let server = proxy_state.server.lock().unwrap();
+    match server.as_ref() {
+        Some(s) => {
+            if s.state.interceptor.resolve_response(id, action) {
+                Ok(())
+            } else {
+                Err(format!("响应拦截 {} 不存在或已超时", id))
             }
         }
         None => Err("代理未运行".to_string()),
