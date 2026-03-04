@@ -649,3 +649,95 @@ export interface FixResult {
   /** 受影响的消息行数 */
   affectedLines: number;
 }
+
+// =============================================================================
+// 中转抓包代理相关类型
+// =============================================================================
+
+/**
+ * 代理工作模式
+ *
+ * 三种模式对应不同的请求处理策略。
+ * 对应 Rust 后端 `models::proxy::ProxyMode` 枚举。
+ */
+export type ProxyMode = 'overview' | 'inspect' | 'intercept';
+
+/**
+ * 代理运行状态
+ *
+ * 对应 Rust 后端 `models::proxy::ProxyStatus` 结构体。
+ */
+export interface ProxyStatus {
+  /** 代理是否正在运行 */
+  running: boolean;
+  /** 代理监听的端口号 */
+  port: number | null;
+  /** 当前工作模式 */
+  mode: ProxyMode;
+  /** 上游 API 的原始 URL */
+  upstreamUrl: string | null;
+  /** 当前待处理的拦截请求数量 */
+  pendingIntercepts: number;
+}
+
+/**
+ * 请求记录状态
+ *
+ * 对应 Rust 后端 `models::proxy::RecordStatus` 枚举。
+ */
+export type RecordStatus = 'pending' | 'intercepted' | 'completed' | 'dropped' | 'error';
+
+/**
+ * 代理记录摘要
+ *
+ * 对应 Rust 后端 `models::proxy::ProxyRecord` 结构体。
+ */
+export interface ProxyRecord {
+  /** 记录唯一 ID */
+  id: number;
+  /** HTTP 方法 */
+  method: string;
+  /** 请求 URL 路径 */
+  url: string;
+  /** 请求状态 */
+  status: RecordStatus;
+  /** HTTP 响应状态码 */
+  statusCode: number | null;
+  /** 请求耗时（毫秒） */
+  durationMs: number | null;
+  /** 响应体大小（字节） */
+  responseSize: number | null;
+  /** 请求发起时间 */
+  timestamp: string;
+}
+
+/**
+ * 代理记录详情
+ *
+ * 对应 Rust 后端 `models::proxy::ProxyRecordDetail` 结构体。
+ */
+export interface ProxyRecordDetail {
+  /** 记录摘要 */
+  summary: ProxyRecord;
+  /** 请求 headers */
+  requestHeaders: Record<string, string>;
+  /** 请求 body */
+  requestBody: string | null;
+  /** 响应 headers */
+  responseHeaders: Record<string, string>;
+  /** 响应 body */
+  responseBody: string | null;
+  /** 错误信息 */
+  errorMessage: string | null;
+}
+
+/**
+ * 拦截决策
+ *
+ * 对应 Rust 后端 `models::proxy::InterceptAction` 枚举。
+ */
+export type InterceptAction =
+  | { type: 'forward' }
+  | { type: 'forwardModified'; headers?: Record<string, string>; body?: string }
+  | { type: 'drop'; statusCode: number }
+  | { type: 'mockResponse'; statusCode: number; headers: Record<string, string>; body: string };

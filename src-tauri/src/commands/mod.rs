@@ -9,5 +9,6 @@
 
 pub mod messages;
 pub mod projects;
+pub mod proxy;
 pub mod settings;
 pub mod tools;

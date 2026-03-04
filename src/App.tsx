@@ -16,7 +16,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { AnimatePresence } from 'motion/react';
-import { Sidebar, ChatView, SettingsPanel } from './components';
+import { Sidebar, ChatView, SettingsPanel, ProxyPanel } from './components';
 import type { Project, Session, ClaudeSettings, EnvSwitcherConfig, EnvProfile, TransformedSession } from './types/claude';
 import {
   getClaudeDataPath,
@@ -92,6 +92,8 @@ function App() {
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH);
   /** 是否正在拖动调整侧边栏宽度，为 true 时禁用过渡动画确保拖动流畅 */
   const [isResizingSidebar, setIsResizingSidebar] = useState(false);
+  /** 中转抓包面板可见性：为 true 时显示 ProxyPanel 替代 ChatView */
+  const [showProxyPanel, setShowProxyPanel] = useState(false);
   /** 使用 ref 追踪拖动状态，避免全局事件监听器中的闭包陈旧问题 */
   const isResizingRef = useRef(false);
 
@@ -737,29 +739,38 @@ function App() {
         />
       )}
 
-      {/* 主内容区：聊天消息展示和操作 */}
-      <ChatView
-        session={currentSession}
-        transformedSession={session}
-        projectPath={currentProject?.path || ''}
-        onEditMessage={handleEditMessage}
-        onDeleteMessage={handleDeleteMessage}
-        onRefresh={handleRefresh}
-        onExport={handleExport}
-        selectionMode={selectionMode}
-        selectedMessages={selectedMessages}
-        onToggleSelect={handleToggleSelect}
-        onSelectAll={handleSelectAll}
-        onDeselectAll={handleDeselectAll}
-        onDeleteSelected={handleDeleteSelected}
-        onToggleSelectionMode={handleToggleSelectionMode}
-        sidebarCollapsed={sidebarCollapsed}
-        onExpandSidebar={() => setSidebarCollapsed(false)}
-        projects={projects}
-        navBackTarget={navBackTarget}
-        onNavigateBack={handleNavigateBack}
-        onNavigateToSession={handleNavigateToSession}
-      />
+      {/* 主内容区：聊天消息展示（或中转抓包面板） */}
+      {showProxyPanel ? (
+        <ProxyPanel
+          onClose={() => setShowProxyPanel(false)}
+          sidebarCollapsed={sidebarCollapsed}
+          onExpandSidebar={() => setSidebarCollapsed(false)}
+        />
+      ) : (
+        <ChatView
+          session={currentSession}
+          transformedSession={session}
+          projectPath={currentProject?.path || ''}
+          onEditMessage={handleEditMessage}
+          onDeleteMessage={handleDeleteMessage}
+          onRefresh={handleRefresh}
+          onExport={handleExport}
+          selectionMode={selectionMode}
+          selectedMessages={selectedMessages}
+          onToggleSelect={handleToggleSelect}
+          onSelectAll={handleSelectAll}
+          onDeselectAll={handleDeselectAll}
+          onDeleteSelected={handleDeleteSelected}
+          onToggleSelectionMode={handleToggleSelectionMode}
+          sidebarCollapsed={sidebarCollapsed}
+          onExpandSidebar={() => setSidebarCollapsed(false)}
+          projects={projects}
+          navBackTarget={navBackTarget}
+          onNavigateBack={handleNavigateBack}
+          onNavigateToSession={handleNavigateToSession}
+          onOpenProxyPanel={() => setShowProxyPanel(true)}
+        />
+      )}
 
       {/*
         设置面板（浮层）：根据 showSettings 条件渲染。

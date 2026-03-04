@@ -16,5 +16,6 @@ pub mod export;
 pub mod file_guard;
 pub mod fixers;
 pub mod parser;
+pub mod proxy;
 pub mod scanner;
 pub mod transformer;

@@ -46,7 +46,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core';
-import type { ClaudeSettings, Project, HistoryEntry, EnvSwitcherConfig, EnvProfile, TransformedSession, ResumeConfig, BackupConfig, FixDefinition, FixResult } from '../types/claude';
+import type { ClaudeSettings, Project, HistoryEntry, EnvSwitcherConfig, EnvProfile, TransformedSession, ResumeConfig, BackupConfig, FixDefinition, FixResult, ProxyStatus, ProxyMode, InterceptAction, ProxyRecord, ProxyRecordDetail } from '../types/claude';
 
 // ============ 路径工具函数 ============
 
@@ -570,4 +570,81 @@ export function formatTimestamp(timestamp: string | number | Date): string {
     minute: '2-digit',
     second: '2-digit',
   });
+}
+
+// =============================================================================
+// 中转抓包代理相关函数
+// =============================================================================
+
+/**
+ * 启动代理服务器
+ *
+ * @param port - 指定端口号，undefined 时自动检测
+ * @returns 代理运行状态
+ */
+export async function startProxy(port?: number): Promise<ProxyStatus> {
+  return invoke<ProxyStatus>('start_proxy', { port: port ?? null });
+}
+
+/**
+ * 停止代理服务器
+ */
+export async function stopProxy(): Promise<void> {
+  return invoke<void>('stop_proxy');
+}
+
+/**
+ * 获取代理当前状态
+ */
+export async function getProxyStatus(): Promise<ProxyStatus> {
+  return invoke<ProxyStatus>('get_proxy_status');
+}
+
+/**
+ * 切换代理工作模式
+ */
+export async function setProxyMode(mode: ProxyMode): Promise<void> {
+  return invoke<void>('set_proxy_mode', { mode });
+}
+
+/**
+ * 处理拦截决策
+ */
+export async function resolveIntercept(id: number, action: InterceptAction): Promise<void> {
+  return invoke<void>('resolve_intercept', { id, action });
+}
+
+/**
+ * 分页获取请求记录
+ */
+export async function getProxyRecords(offset: number, limit: number): Promise<ProxyRecord[]> {
+  return invoke<ProxyRecord[]>('get_proxy_records', { offset, limit });
+}
+
+/**
+ * 获取单条记录详情
+ */
+export async function getRecordDetail(id: number): Promise<ProxyRecordDetail> {
+  return invoke<ProxyRecordDetail>('get_record_detail', { id });
+}
+
+/**
+ * 清空所有请求记录
+ */
+export async function clearProxyRecords(): Promise<void> {
+  return invoke<void>('clear_proxy_records');
+}
+
+/**
+ * 导出所有记录为 JSON 格式
+ */
+export async function exportProxyRecords(): Promise<string> {
+  return invoke<string>('export_proxy_records');
+}
+
+/**
+ * 启动时崩溃恢复检查
+ */
+export async function checkProxyRecovery(): Promise<boolean> {
+  return invoke<boolean>('check_proxy_recovery');
 }

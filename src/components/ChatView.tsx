@@ -19,7 +19,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   ChevronRight, ChevronDown, ChevronUp, X, CheckSquare, Square, Filter,
   Download, FileText, FileJson, RefreshCw, ArrowLeft, Plus,
-  Copy, Edit2, Trash2, Bot, User, Lightbulb, Wrench, Archive, Terminal, ExternalLink, Search
+  Copy, Edit2, Trash2, Bot, User, Lightbulb, Wrench, Archive, Terminal, ExternalLink, Search, Globe
 } from 'lucide-react';
 import type { Session, Project, DisplayMessage, TransformedSession, ToolUseInfo, SearchHighlight } from '../types/claude';
 import { formatTimestamp, searchSession, openResumeTerminal, insertMessage } from '../utils/claudeData';
@@ -84,6 +84,8 @@ interface ChatViewProps {
   onNavigateBack: () => void;
   /** 跳转到指定会话的回调（可能跨项目），返回是否成功 */
   onNavigateToSession: (encodedProject: string, sessionId: string) => Promise<boolean>;
+  /** 打开中转抓包面板的回调 */
+  onOpenProxyPanel?: () => void;
 }
 
 /** 展开/收起动画的过渡参数 */
@@ -821,6 +823,7 @@ export function ChatView({
   navBackTarget,
   onNavigateBack,
   onNavigateToSession,
+  onOpenProxyPanel,
 }: ChatViewProps) {
   /** 当前正在编辑的消息 displayId，为 null 表示没有消息处于编辑状态 */
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -1659,6 +1662,17 @@ export function ChatView({
                   >
                     <Wrench className="w-4 h-4" />
                     <span>一键修复</span>
+                  </button>
+                  {/* 中转抓包：打开代理面板 */}
+                  <button
+                    onClick={() => {
+                      setShowToolsDropdown(false);
+                      onOpenProxyPanel?.();
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent/50 transition-colors"
+                  >
+                    <Globe className="w-4 h-4" />
+                    <span>中转抓包</span>
                   </button>
                 </motion.div>
               )}

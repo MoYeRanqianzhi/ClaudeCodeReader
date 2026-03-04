@@ -21,6 +21,7 @@ mod models;
 mod services;
 mod utils;
 
+use commands::proxy::ProxyState;
 use services::cache::AppCache;
 
 // `#[cfg_attr(mobile, tauri::mobile_entry_point)]`：条件编译属性
@@ -60,6 +61,8 @@ pub fn run() {
         // - 项目列表缓存（TTL 30 秒）
         // - 会话消息 LRU 缓存（最多 20 个会话）
         .manage(AppCache::new())
+        // 注册 ProxyState 为代理全局状态
+        .manage(ProxyState::new())
         // === 自定义 Tauri Commands 注册 ===
         // 所有 command 函数通过 `invoke_handler` 注册，前端通过 `invoke()` 调用
         .invoke_handler(tauri::generate_handler![
@@ -94,6 +97,17 @@ pub fn run() {
             // 一键修复 commands
             commands::tools::list_fixers,
             commands::tools::execute_fixer,
+            // 中转抓包代理 commands
+            commands::proxy::start_proxy,
+            commands::proxy::stop_proxy,
+            commands::proxy::get_proxy_status,
+            commands::proxy::set_proxy_mode,
+            commands::proxy::resolve_intercept,
+            commands::proxy::get_proxy_records,
+            commands::proxy::get_record_detail,
+            commands::proxy::clear_proxy_records,
+            commands::proxy::export_proxy_records,
+            commands::proxy::check_proxy_recovery,
         ])
         // `setup` 闭包：在应用窗口创建之前执行的初始化钩子
         .setup(|app| {
@@ -105,6 +119,16 @@ pub fn run() {
                         .build(),
                 )?;
             }
+
+            // 代理崩溃恢复检查：如果上次异常退出，自动恢复 settings.json
+            tauri::async_runtime::spawn(async {
+                match services::proxy::config_guard::check_and_recover().await {
+                    Ok(true) => log::info!("代理崩溃恢复完成"),
+                    Ok(false) => {} // 无需恢复
+                    Err(e) => log::warn!("代理崩溃恢复失败: {}", e),
+                }
+            });
+
             Ok(())
         })
         // `tauri::generate_context!()` 宏：在编译时读取 `tauri.conf.json` 配置文件，

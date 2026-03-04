@@ -7,3 +7,4 @@ export { MessageBlockList } from './MessageBlockList';
 export { MarkdownRenderer } from './MarkdownRenderer';
 export { ToolUseRenderer } from './ToolUseRenderer';
 export { ToolResultRenderer } from './ToolResultRenderer';
+export { ProxyPanel } from './ProxyPanel';

@@ -28,7 +28,7 @@ tauri-plugin-shell = "2"
 # Windows 用 Shell COM API，macOS 用 NSWorkspace，Linux 用 D-Bus
 tauri-plugin-opener = "2"
 # 异步文件 I/O：利用 Tauri 自带的 tokio runtime 进行并行文件扫描
-tokio = { version = "1", features = ["fs", "rt"] }
+tokio = { version = "1", features = ["fs", "rt", "sync", "time", "net", "macros"] }
 # 跨平台主目录获取：用于定位 ~/.claude/ 和 ~/.mo/CCR/ 目录
 dirs = "6"
 # 正则表达式：仅用于计划执行消息检测（2 个预编译模式）
@@ -37,3 +37,18 @@ regex = "1"
 rayon = "1.10"
 # SIMD 加速子串搜索：后端文本搜索核心
 memchr = "2"
+# === 中转抓包代理功能 ===
+# HTTP/1.1 服务器：本地代理监听端口，接收 Claude Code CLI 的 HTTP 请求
+hyper = { version = "1", features = ["server", "http1"] }
+# hyper 工具库：提供 TokioIo 适配器和连接处理辅助
+hyper-util = { version = "0.1", features = ["tokio"] }
+# HTTP body 工具：hyper 1.x 的 body 类型转换和组合
+http-body-util = "0.1"
+# HTTPS 客户端：将代理收到的请求转发到上游 Anthropic API
+reqwest = { version = "0.12", features = ["stream", "json"] }
+# HTTP 类型库：Request/Response/StatusCode 等基础类型
+http = "1"
+# 字节缓冲区：高效零拷贝字节流处理
+bytes = "1"
+# 异步流处理：SSE 流式响应的 StreamExt trait
+futures-util = "0.3"

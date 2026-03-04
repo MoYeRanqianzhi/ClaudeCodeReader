@@ -9,4 +9,5 @@
 pub mod display;
 pub mod message;
 pub mod project;
+pub mod proxy;
 pub mod settings;
