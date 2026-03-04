@@ -559,27 +559,49 @@ export const ProxyPanel = memo(function ProxyPanel({
     }
   }, []);
 
+  /**
+   * 乐观更新：立即将指定记录从"已拦截"状态移除
+   *
+   * 点击放行/丢弃后，先更新本地 UI（按钮立刻消失），
+   * 再异步调用后端。即使后端失败也不回滚（下次轮询会自动纠正）。
+   */
+  const optimisticResolve = useCallback((id: number, newStatus: RecordStatus) => {
+    setRecords(prev => prev.map(r =>
+      r.id === id ? { ...r, status: newStatus } : r
+    ));
+    setStatus(prev => ({
+      ...prev,
+      pendingIntercepts: Math.max(0, prev.pendingIntercepts - 1),
+    }));
+  }, []);
+
   /** 处理拦截决策：放行 */
   const handleForward = useCallback(async (id: number) => {
+    // 乐观更新：立即将记录标记为 pending（等待上游响应），按钮消失
+    optimisticResolve(id, 'pending');
     try {
       await resolveIntercept(id, { type: 'forward' });
-      refreshRecords();
-      refreshStatus();
     } catch (err) {
-      console.error('放行失败:', err);
+      setErrorMsg(`放行失败: ${err}`);
     }
-  }, [refreshRecords, refreshStatus]);
+    // 异步刷新以获取最终状态
+    refreshRecords();
+    refreshStatus();
+  }, [optimisticResolve, refreshRecords, refreshStatus]);
 
   /** 处理拦截决策：丢弃 */
   const handleDrop = useCallback(async (id: number) => {
+    // 乐观更新：立即将记录标记为 dropped，按钮消失
+    optimisticResolve(id, 'dropped');
     try {
       await resolveIntercept(id, { type: 'drop', statusCode: 403 });
-      refreshRecords();
-      refreshStatus();
     } catch (err) {
-      console.error('丢弃失败:', err);
+      setErrorMsg(`丢弃失败: ${err}`);
     }
-  }, [refreshRecords, refreshStatus]);
+    // 异步刷新以获取最终状态
+    refreshRecords();
+    refreshStatus();
+  }, [optimisticResolve, refreshRecords, refreshStatus]);
 
   // ============ 渲染 ============
 

@@ -50,9 +50,24 @@ pub async fn forward_request(
     let mut req_builder = client.request(req_method, &full_url);
 
     // 设置 headers
+    // 跳过 hop-by-hop 头和由 reqwest 自动管理的头：
+    // - host: reqwest 根据 URL 自动设置
+    // - content-length: reqwest 根据 body 长度自动计算；手动转发会导致重复/冲突，
+    //   上游可能按错误长度读取 body，造成 JSON 截断（表现为 400 invalid character）
+    // - transfer-encoding: hop-by-hop 头，代理不应转发
+    // - connection / keep-alive: hop-by-hop 头
+    // - accept-encoding: reqwest 自行处理压缩协商
+    const SKIP_HEADERS: &[&str] = &[
+        "host",
+        "content-length",
+        "transfer-encoding",
+        "connection",
+        "keep-alive",
+        "accept-encoding",
+    ];
     for (key, value) in headers {
-        // 跳过 host header（reqwest 会自动设置）
-        if key.to_lowercase() == "host" {
+        let lower = key.to_lowercase();
+        if SKIP_HEADERS.contains(&lower.as_str()) {
             continue;
         }
         req_builder = req_builder.header(key, value);
@@ -129,9 +144,16 @@ pub fn build_response(
 ) -> Result<hyper::Response<http_body_util::Full<Bytes>>, String> {
     let mut builder = hyper::Response::builder().status(status);
 
+    // 跳过 hop-by-hop 头和由 hyper 自动管理的头
+    const SKIP_RESP_HEADERS: &[&str] = &[
+        "transfer-encoding",
+        "connection",
+        "keep-alive",
+        "content-length",
+    ];
     for (key, value) in headers {
-        // 跳过 transfer-encoding（hyper 会自动处理）
-        if key.to_lowercase() == "transfer-encoding" {
+        let lower = key.to_lowercase();
+        if SKIP_RESP_HEADERS.contains(&lower.as_str()) {
             continue;
         }
         builder = builder.header(key, value);
