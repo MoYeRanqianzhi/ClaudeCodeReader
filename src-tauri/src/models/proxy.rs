@@ -121,11 +121,13 @@ pub enum InterceptAction {
         body: Option<String>,
     },
     /// 丢弃请求：不转发，返回指定状态码给 Claude Code
+    #[serde(rename_all = "camelCase")]
     Drop {
         /// 返回给客户端的 HTTP 状态码（默认 503）
         status_code: u16,
     },
     /// 伪造响应：不转发到上游，直接返回自定义响应
+    #[serde(rename_all = "camelCase")]
     MockResponse {
         /// 伪造响应的 HTTP 状态码
         status_code: u16,
@@ -172,6 +174,7 @@ pub enum InterceptResponseAction {
         body: Option<String>,
     },
     /// 丢弃响应：不返回上游响应，给 Claude Code 返回错误
+    #[serde(rename_all = "camelCase")]
     Drop {
         /// 返回给客户端的 HTTP 状态码
         status_code: u16,
