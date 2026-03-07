@@ -24,7 +24,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   Play, Square, Radio, Eye, Shield, ChevronLeft,
   Trash2, Download, RefreshCw, ArrowRight,
-  Check, X, Globe, AlertCircle, Clock, Loader,
+  Check, X, Globe, AlertCircle, Clock, Loader, Plus,
 } from 'lucide-react';
 import { listen } from '@tauri-apps/api/event';
 import type {
@@ -112,10 +112,192 @@ function StatusBadge({ status }: { status: RecordStatus }) {
 /** 详情面板 tab 类型 */
 type DetailTab = 'headers' | 'body' | 'raw';
 
+/** 编辑数据：headers + body（作为规范数据源） */
+interface EditedData {
+  headers: Record<string, string>;
+  body: string;
+}
+
+/**
+ * 尝试 JSON 美化格式化
+ * 若内容是有效 JSON 则格式化输出，否则原样返回
+ */
+function formatJson(content: string): string {
+  try {
+    return JSON.stringify(JSON.parse(content), null, 2);
+  } catch {
+    return content;
+  }
+}
+
+/**
+ * 从 headers + body 构建 Raw HTTP 文本
+ */
+function buildRawText(
+  prefix: string,
+  headers: Record<string, string>,
+  body: string,
+): string {
+  let raw = prefix + '\n';
+  for (const [k, v] of Object.entries(headers)) {
+    raw += `${k}: ${v}\n`;
+  }
+  if (body) {
+    raw += '\n' + body;
+  }
+  return raw;
+}
+
+/**
+ * 解析 Raw HTTP 文本为 headers + body
+ * 格式：第一行为请求行/状态行，后续为 headers，空行后为 body
+ */
+function parseRawText(raw: string): { headers: Record<string, string>; body: string } {
+  const lines = raw.split('\n');
+  const headers: Record<string, string> = {};
+  let bodyStartIndex = -1;
+
+  // 跳过第一行（请求行/状态行），从第二行开始解析 headers
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim() === '') {
+      // 空行之后是 body
+      bodyStartIndex = i + 1;
+      break;
+    }
+    const colonIdx = line.indexOf(':');
+    if (colonIdx > 0) {
+      const key = line.substring(0, colonIdx).trim();
+      const value = line.substring(colonIdx + 1).trim();
+      headers[key] = value;
+    }
+  }
+
+  const body = bodyStartIndex > 0 && bodyStartIndex < lines.length
+    ? lines.slice(bodyStartIndex).join('\n')
+    : '';
+
+  return { headers, body };
+}
+
+/**
+ * 可编辑 Headers 表格组件
+ *
+ * 与只读 HeadersTable 视觉布局完全一致：左列为 key，右列为 value，
+ * 但两列都变为可编辑的 input 元素，每行末尾有删除按钮。
+ */
+function EditableHeadersTable({
+  headers,
+  onChange,
+  accentColor = 'orange',
+}: {
+  headers: Record<string, string>;
+  onChange: (newHeaders: Record<string, string>) => void;
+  /** 强调色：orange（请求拦截）或 purple（响应拦截） */
+  accentColor?: 'orange' | 'purple';
+}) {
+  const entries = Object.entries(headers);
+  /** 边框颜色映射 */
+  const borderFocus = accentColor === 'orange'
+    ? 'focus:border-orange-500 focus:ring-orange-500/50'
+    : 'focus:border-purple-500 focus:ring-purple-500/50';
+
+  /** 更新指定索引处的 header key 或 value */
+  const updateEntry = (index: number, field: 'key' | 'value', newVal: string) => {
+    const newHeaders: Record<string, string> = {};
+    entries.forEach(([k, v], i) => {
+      if (i === index) {
+        const newKey = field === 'key' ? newVal : k;
+        const newValue = field === 'value' ? newVal : v;
+        if (newKey) newHeaders[newKey] = newValue;
+      } else {
+        newHeaders[k] = v;
+      }
+    });
+    onChange(newHeaders);
+  };
+
+  /** 删除指定索引处的 header */
+  const removeEntry = (index: number) => {
+    const newHeaders: Record<string, string> = {};
+    entries.forEach(([k, v], i) => {
+      if (i !== index) newHeaders[k] = v;
+    });
+    onChange(newHeaders);
+  };
+
+  /** 添加一个新的空 header */
+  const addEntry = () => {
+    const newHeaders = { ...headers };
+    // 用唯一的占位 key 避免覆盖已有 header
+    let placeholder = 'x-new-header';
+    let count = 1;
+    while (placeholder in newHeaders) {
+      placeholder = `x-new-header-${count++}`;
+    }
+    newHeaders[placeholder] = '';
+    onChange(newHeaders);
+  };
+
+  return (
+    <div>
+      <div className="rounded-lg border border-border overflow-hidden">
+        {entries.map(([key, value], i) => (
+          <div
+            key={`${i}-${key}`}
+            className={`flex items-center text-xs ${i > 0 ? 'border-t border-border' : ''}`}
+          >
+            {/* Key 输入框 — 与只读版布局对齐 */}
+            <input
+              type="text"
+              value={key}
+              onChange={e => updateEntry(i, 'key', e.target.value)}
+              className={`w-[180px] shrink-0 px-3 py-1.5 bg-muted/30 font-mono font-medium text-foreground border-none outline-none focus:ring-1 ${borderFocus}`}
+              spellCheck={false}
+            />
+            {/* Value 输入框 */}
+            <input
+              type="text"
+              value={value}
+              onChange={e => updateEntry(i, 'value', e.target.value)}
+              className={`flex-1 px-3 py-1.5 font-mono text-muted-foreground bg-transparent border-none outline-none focus:ring-1 ${borderFocus}`}
+              spellCheck={false}
+            />
+            {/* 删除按钮 */}
+            <button
+              onClick={() => removeEntry(i)}
+              className="px-2 py-1.5 text-muted-foreground/50 hover:text-destructive transition-colors shrink-0"
+              title="删除此 header"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          </div>
+        ))}
+      </div>
+      {/* 添加 header 按钮 */}
+      <button
+        onClick={addEntry}
+        className="mt-2 px-3 py-1 rounded text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors flex items-center gap-1"
+      >
+        <Plus className="w-3 h-3" />
+        添加 Header
+      </button>
+    </div>
+  );
+}
+
 /**
  * 详情面板组件
+ *
  * 显示选中请求的完整 Headers、Body 和 Raw 数据。
- * 在拦截/响应拦截状态下，Body 变为可编辑 textarea 并显示决策按钮。
+ * 在拦截/响应拦截状态下，三个 Tab 均可编辑：
+ * - Headers: 可编辑键值对表格（EditableHeadersTable）
+ * - Body: 与只读 JsonBlock 样式一致的 textarea，自动 JSON 美化
+ * - Raw: 与只读 pre 样式一致的 textarea，与 Headers/Body 双向同步
+ *
+ * 同步机制：
+ * - Headers/Body → Raw：实时派生（每次 render 重新计算）
+ * - Raw → Headers/Body：blur 时解析同步
  */
 const DetailPanel = memo(function DetailPanel({
   detail,
@@ -126,21 +308,34 @@ const DetailPanel = memo(function DetailPanel({
   detail: ProxyRecordDetail | null;
   loading: boolean;
   /** 请求拦截决策回调 */
-  onResolveRequest: (id: number, action: 'forward' | 'forwardModified' | 'drop', editedBody?: string) => void;
+  onResolveRequest: (id: number, action: 'forward' | 'forwardModified' | 'drop', edited?: { headers?: Record<string, string>; body?: string }) => void;
   /** 响应拦截决策回调 */
-  onResolveResponse: (id: number, action: 'forward' | 'forwardModified' | 'drop', editedBody?: string) => void;
+  onResolveResponse: (id: number, action: 'forward' | 'forwardModified' | 'drop', edited?: { headers?: Record<string, string>; body?: string }) => void;
 }) {
   const [activeTab, setActiveTab] = useState<DetailTab>('headers');
-  /** 请求 Body 编辑内容（拦截时可修改） */
-  const [editedRequestBody, setEditedRequestBody] = useState('');
-  /** 响应 Body 编辑内容（响应拦截时可修改） */
-  const [editedResponseBody, setEditedResponseBody] = useState('');
 
-  // 当选中记录变化时，同步编辑内容
+  // ---- 请求编辑状态（拦截时可修改） ----
+  const [editedReq, setEditedReq] = useState<EditedData>({ headers: {}, body: '' });
+  // ---- 响应编辑状态（响应拦截时可修改） ----
+  const [editedResp, setEditedResp] = useState<EditedData>({ headers: {}, body: '' });
+  // ---- Raw textarea 临时内容（编辑中保持本地状态，blur 时同步） ----
+  const [rawReqText, setRawReqText] = useState<string | null>(null);
+  const [rawRespText, setRawRespText] = useState<string | null>(null);
+
+  // 当选中记录变化时，初始化编辑状态（JSON 美化 body）
   useEffect(() => {
     if (detail) {
-      setEditedRequestBody(detail.requestBody ?? '');
-      setEditedResponseBody(detail.responseBody ?? '');
+      setEditedReq({
+        headers: { ...detail.requestHeaders },
+        body: formatJson(detail.requestBody ?? ''),
+      });
+      setEditedResp({
+        headers: { ...detail.responseHeaders },
+        body: formatJson(detail.responseBody ?? ''),
+      });
+      // 清除 Raw 临时状态
+      setRawReqText(null);
+      setRawRespText(null);
     }
   }, [detail?.summary.id, detail?.requestBody, detail?.responseBody]);
 
@@ -166,11 +361,55 @@ const DetailPanel = memo(function DetailPanel({
   const isResponseIntercepted = detail.summary.status === 'responseIntercepted';
   const isEditable = isRequestIntercepted || isResponseIntercepted;
 
+  // ---- 派生 Raw 文本（从 headers + body 实时计算） ----
+  const derivedRawReq = buildRawText(
+    `${detail.summary.method} ${detail.summary.url}`,
+    isRequestIntercepted ? editedReq.headers : detail.requestHeaders,
+    isRequestIntercepted ? editedReq.body : formatJson(detail.requestBody ?? ''),
+  );
+  const hasResp = isResponseIntercepted || detail.responseBody || Object.keys(detail.responseHeaders).length > 0;
+  const derivedRawResp = hasResp ? buildRawText(
+    detail.summary.statusCode ? `HTTP ${detail.summary.statusCode}` : 'HTTP ???',
+    isResponseIntercepted ? editedResp.headers : detail.responseHeaders,
+    isResponseIntercepted ? editedResp.body : formatJson(detail.responseBody ?? ''),
+  ) : '';
+
+  /** Raw textarea blur 时解析并同步回 headers + body */
+  const handleRawReqBlur = () => {
+    if (rawReqText !== null) {
+      const parsed = parseRawText(rawReqText);
+      setEditedReq({ headers: parsed.headers, body: parsed.body });
+      setRawReqText(null);
+    }
+  };
+  const handleRawRespBlur = () => {
+    if (rawRespText !== null) {
+      const parsed = parseRawText(rawRespText);
+      setEditedResp({ headers: parsed.headers, body: parsed.body });
+      setRawRespText(null);
+    }
+  };
+
+  /** 判断内容是否被修改 */
+  const isReqModified = isRequestIntercepted && (
+    JSON.stringify(editedReq.headers) !== JSON.stringify(detail.requestHeaders) ||
+    editedReq.body !== formatJson(detail.requestBody ?? '')
+  );
+  const isRespModified = isResponseIntercepted && (
+    JSON.stringify(editedResp.headers) !== JSON.stringify(detail.responseHeaders) ||
+    editedResp.body !== formatJson(detail.responseBody ?? '')
+  );
+
   const tabs: { key: DetailTab; label: string }[] = [
     { key: 'headers', label: 'Headers' },
     { key: 'body', label: 'Body' },
     { key: 'raw', label: 'Raw' },
   ];
+
+  /** 通用的 textarea 样式（与只读 pre/JsonBlock 完全对齐） */
+  const textareaBaseClass = 'w-full bg-muted/50 rounded-lg p-3 text-xs font-mono overflow-auto whitespace-pre-wrap break-all resize-y outline-none';
+  const reqBorderClass = 'border border-orange-500/30 focus:border-orange-500 focus:ring-1 focus:ring-orange-500/50';
+  const respBorderClass = 'border border-purple-500/30 focus:border-purple-500 focus:ring-1 focus:ring-purple-500/50';
 
   return (
     <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
@@ -215,27 +454,51 @@ const DetailPanel = memo(function DetailPanel({
 
       {/* Tab 内容 */}
       <div className="flex-1 overflow-auto p-3">
+        {/* ======== Headers Tab ======== */}
         {activeTab === 'headers' && (
           <div className="space-y-4">
             {/* 请求 Headers */}
             <div>
               <h4 className="text-xs font-semibold text-muted-foreground uppercase mb-2">
                 请求 Headers
+                {isRequestIntercepted && (
+                  <span className="ml-2 text-orange-500 normal-case font-normal">（可编辑）</span>
+                )}
               </h4>
-              <HeadersTable headers={detail.requestHeaders} />
+              {isRequestIntercepted ? (
+                <EditableHeadersTable
+                  headers={editedReq.headers}
+                  onChange={h => setEditedReq(prev => ({ ...prev, headers: h }))}
+                  accentColor="orange"
+                />
+              ) : (
+                <HeadersTable headers={detail.requestHeaders} />
+              )}
             </div>
             {/* 响应 Headers */}
-            {Object.keys(detail.responseHeaders).length > 0 && (
+            {(isResponseIntercepted || Object.keys(detail.responseHeaders).length > 0) && (
               <div>
                 <h4 className="text-xs font-semibold text-muted-foreground uppercase mb-2">
                   响应 Headers
+                  {isResponseIntercepted && (
+                    <span className="ml-2 text-purple-500 normal-case font-normal">（可编辑）</span>
+                  )}
                 </h4>
-                <HeadersTable headers={detail.responseHeaders} />
+                {isResponseIntercepted ? (
+                  <EditableHeadersTable
+                    headers={editedResp.headers}
+                    onChange={h => setEditedResp(prev => ({ ...prev, headers: h }))}
+                    accentColor="purple"
+                  />
+                ) : (
+                  <HeadersTable headers={detail.responseHeaders} />
+                )}
               </div>
             )}
           </div>
         )}
 
+        {/* ======== Body Tab ======== */}
         {activeTab === 'body' && (
           <div className="space-y-4">
             {/* 请求 Body */}
@@ -248,9 +511,9 @@ const DetailPanel = memo(function DetailPanel({
               </h4>
               {isRequestIntercepted ? (
                 <textarea
-                  value={editedRequestBody}
-                  onChange={e => setEditedRequestBody(e.target.value)}
-                  className="w-full h-[300px] bg-muted/50 rounded-lg p-3 text-xs font-mono resize-y border border-orange-500/30 focus:border-orange-500 focus:outline-none focus:ring-1 focus:ring-orange-500/50"
+                  value={editedReq.body}
+                  onChange={e => setEditedReq(prev => ({ ...prev, body: e.target.value }))}
+                  className={`${textareaBaseClass} ${reqBorderClass} min-h-[200px] max-h-[400px]`}
                   spellCheck={false}
                 />
               ) : detail.requestBody ? (
@@ -270,9 +533,9 @@ const DetailPanel = memo(function DetailPanel({
                 </h4>
                 {isResponseIntercepted ? (
                   <textarea
-                    value={editedResponseBody}
-                    onChange={e => setEditedResponseBody(e.target.value)}
-                    className="w-full h-[300px] bg-muted/50 rounded-lg p-3 text-xs font-mono resize-y border border-purple-500/30 focus:border-purple-500 focus:outline-none focus:ring-1 focus:ring-purple-500/50"
+                    value={editedResp.body}
+                    onChange={e => setEditedResp(prev => ({ ...prev, body: e.target.value }))}
+                    className={`${textareaBaseClass} ${respBorderClass} min-h-[200px] max-h-[400px]`}
                     spellCheck={false}
                   />
                 ) : detail.responseBody ? (
@@ -286,28 +549,53 @@ const DetailPanel = memo(function DetailPanel({
           </div>
         )}
 
+        {/* ======== Raw Tab ======== */}
         {activeTab === 'raw' && (
           <div className="space-y-4">
+            {/* 原始请求 */}
             <div>
               <h4 className="text-xs font-semibold text-muted-foreground uppercase mb-2">
                 原始请求
+                {isRequestIntercepted && (
+                  <span className="ml-2 text-orange-500 normal-case font-normal">（可编辑，blur 时同步）</span>
+                )}
               </h4>
-              <pre className="bg-muted/50 rounded-lg p-3 text-xs font-mono overflow-auto max-h-[300px] whitespace-pre-wrap break-all">
-                {`${detail.summary.method} ${detail.summary.url}\n`}
-                {Object.entries(detail.requestHeaders).map(([k, v]) => `${k}: ${v}\n`).join('')}
-                {detail.requestBody ? `\n${detail.requestBody}` : ''}
-              </pre>
+              {isRequestIntercepted ? (
+                <textarea
+                  value={rawReqText ?? derivedRawReq}
+                  onChange={e => setRawReqText(e.target.value)}
+                  onBlur={handleRawReqBlur}
+                  className={`${textareaBaseClass} ${reqBorderClass} min-h-[200px] max-h-[300px]`}
+                  spellCheck={false}
+                />
+              ) : (
+                <pre className="bg-muted/50 rounded-lg p-3 text-xs font-mono overflow-auto max-h-[300px] whitespace-pre-wrap break-all">
+                  {derivedRawReq}
+                </pre>
+              )}
             </div>
-            {(detail.responseBody || Object.keys(detail.responseHeaders).length > 0) && (
+            {/* 原始响应 */}
+            {hasResp && (
               <div>
                 <h4 className="text-xs font-semibold text-muted-foreground uppercase mb-2">
                   原始响应
+                  {isResponseIntercepted && (
+                    <span className="ml-2 text-purple-500 normal-case font-normal">（可编辑，blur 时同步）</span>
+                  )}
                 </h4>
-                <pre className="bg-muted/50 rounded-lg p-3 text-xs font-mono overflow-auto max-h-[300px] whitespace-pre-wrap break-all">
-                  {detail.summary.statusCode ? `HTTP ${detail.summary.statusCode}\n` : ''}
-                  {Object.entries(detail.responseHeaders).map(([k, v]) => `${k}: ${v}\n`).join('')}
-                  {detail.responseBody ? `\n${detail.responseBody}` : ''}
-                </pre>
+                {isResponseIntercepted ? (
+                  <textarea
+                    value={rawRespText ?? derivedRawResp}
+                    onChange={e => setRawRespText(e.target.value)}
+                    onBlur={handleRawRespBlur}
+                    className={`${textareaBaseClass} ${respBorderClass} min-h-[200px] max-h-[300px]`}
+                    spellCheck={false}
+                  />
+                ) : (
+                  <pre className="bg-muted/50 rounded-lg p-3 text-xs font-mono overflow-auto max-h-[300px] whitespace-pre-wrap break-all">
+                    {derivedRawResp}
+                  </pre>
+                )}
               </div>
             )}
           </div>
@@ -340,9 +628,12 @@ const DetailPanel = memo(function DetailPanel({
               <Check className="w-3 h-3" />
               放行
             </motion.button>
-            {editedRequestBody !== (detail.requestBody ?? '') && (
+            {isReqModified && (
               <motion.button
-                onClick={() => onResolveRequest(detail.summary.id, 'forwardModified', editedRequestBody)}
+                onClick={() => onResolveRequest(detail.summary.id, 'forwardModified', {
+                  headers: editedReq.headers,
+                  body: editedReq.body,
+                })}
                 className="px-3 py-1.5 rounded text-xs font-medium bg-blue-500/15 text-blue-600 dark:text-blue-400 hover:bg-blue-500/25 transition-colors flex items-center gap-1"
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
@@ -379,9 +670,12 @@ const DetailPanel = memo(function DetailPanel({
               <Check className="w-3 h-3" />
               放行
             </motion.button>
-            {editedResponseBody !== (detail.responseBody ?? '') && (
+            {isRespModified && (
               <motion.button
-                onClick={() => onResolveResponse(detail.summary.id, 'forwardModified', editedResponseBody)}
+                onClick={() => onResolveResponse(detail.summary.id, 'forwardModified', {
+                  headers: editedResp.headers,
+                  body: editedResp.body,
+                })}
                 className="px-3 py-1.5 rounded text-xs font-medium bg-blue-500/15 text-blue-600 dark:text-blue-400 hover:bg-blue-500/25 transition-colors flex items-center gap-1"
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
@@ -737,6 +1031,7 @@ export const ProxyPanel = memo(function ProxyPanel({
    *
    * 点击放行/丢弃后，先更新本地 UI（按钮立刻消失），
    * 再异步调用后端。通过 resolvingIdsRef 防止后续 refreshRecords 覆盖。
+   * 同时更新 selectedDetail 的状态，防止详情面板决策按钮残留。
    */
   const optimisticResolve = useCallback((id: number, newStatus: RecordStatus) => {
     // 将 ID 加入保护集合，防止 refreshRecords 覆盖
@@ -744,6 +1039,13 @@ export const ProxyPanel = memo(function ProxyPanel({
     setRecords(prev => prev.map(r =>
       r.id === id ? { ...r, status: newStatus } : r
     ));
+    // 同步更新详情面板状态，使决策按钮立即消失
+    setSelectedDetail(prev => {
+      if (prev && prev.summary.id === id) {
+        return { ...prev, summary: { ...prev.summary, status: newStatus } };
+      }
+      return prev;
+    });
     setStatus(prev => ({
       ...prev,
       pendingIntercepts: Math.max(0, prev.pendingIntercepts - 1),
@@ -780,12 +1082,12 @@ export const ProxyPanel = memo(function ProxyPanel({
 
   /**
    * 详情面板请求拦截决策回调
-   * 支持放行、修改放行、丢弃三种操作
+   * 支持放行、修改放行、丢弃三种操作，可传递编辑后的 headers 和 body
    */
   const handleDetailResolveRequest = useCallback(async (
     id: number,
     action: 'forward' | 'forwardModified' | 'drop',
-    editedBody?: string,
+    edited?: { headers?: Record<string, string>; body?: string },
   ) => {
     if (action === 'forward') {
       optimisticResolve(id, 'pending');
@@ -797,7 +1099,11 @@ export const ProxyPanel = memo(function ProxyPanel({
     } else if (action === 'forwardModified') {
       optimisticResolve(id, 'pending');
       try {
-        await resolveIntercept(id, { type: 'forwardModified', body: editedBody });
+        await resolveIntercept(id, {
+          type: 'forwardModified',
+          headers: edited?.headers,
+          body: edited?.body,
+        });
       } catch (err) {
         setErrorMsg(`修改放行失败: ${err}`);
       }
@@ -815,12 +1121,12 @@ export const ProxyPanel = memo(function ProxyPanel({
 
   /**
    * 详情面板响应拦截决策回调
-   * 支持放行、修改放行、丢弃三种操作
+   * 支持放行、修改放行、丢弃三种操作，可传递编辑后的 headers 和 body
    */
   const handleDetailResolveResponse = useCallback(async (
     id: number,
     action: 'forward' | 'forwardModified' | 'drop',
-    editedBody?: string,
+    edited?: { headers?: Record<string, string>; body?: string },
   ) => {
     if (action === 'forward') {
       optimisticResolve(id, 'completed');
@@ -832,7 +1138,11 @@ export const ProxyPanel = memo(function ProxyPanel({
     } else if (action === 'forwardModified') {
       optimisticResolve(id, 'completed');
       try {
-        await resolveResponseIntercept(id, { type: 'forwardModified', body: editedBody });
+        await resolveResponseIntercept(id, {
+          type: 'forwardModified',
+          headers: edited?.headers,
+          body: edited?.body,
+        });
       } catch (err) {
         setErrorMsg(`响应修改放行失败: ${err}`);
       }
