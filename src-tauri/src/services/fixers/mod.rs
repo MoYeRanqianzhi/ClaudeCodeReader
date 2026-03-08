@@ -24,6 +24,8 @@
 //!
 //! 详细指南请参考 `docs/development/fixers-guide.md`。
 
+pub mod patch_toolsearch;
+pub mod restore_toolsearch;
 pub mod strip_thinking;
 
 use std::future::Future;
@@ -193,6 +195,17 @@ pub fn all_fixers() -> Vec<FixerEntry> {
         FixerEntry {
             definition: strip_thinking::definition,
             executor: FixerExecutor::Entry(strip_thinking::execute),
+        },
+        // 修复 #2：解除 ToolSearch 域名限制（Full 档位）
+        // 脚本思路来自 Linux.do 的此方大佬：https://linux.do/t/topic/1703407
+        FixerEntry {
+            definition: patch_toolsearch::definition,
+            executor: FixerExecutor::Full(patch_toolsearch::execute),
+        },
+        // 修复 #3：撤销 ToolSearch 补丁，从备份恢复原始文件（Full 档位）
+        FixerEntry {
+            definition: restore_toolsearch::definition,
+            executor: FixerExecutor::Full(restore_toolsearch::execute),
         },
     ]
 }
