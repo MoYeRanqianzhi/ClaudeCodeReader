@@ -69,7 +69,8 @@ const PATCH_SUFFIX: &[u8] = b"*/}catch{return!0}";
 ///
 /// 对 Claude Code 安装文件进行补丁前，
 /// 先以此后缀创建备份文件，方便用户恢复。
-const BACKUP_SUFFIX: &str = ".toolsearch-bak";
+/// `pub(super)` 供 `restore_toolsearch` 模块复用。
+pub(super) const BACKUP_SUFFIX: &str = ".toolsearch-bak";
 
 // ============ 安装探测结构体 ============
 
@@ -77,12 +78,13 @@ const BACKUP_SUFFIX: &str = ".toolsearch-bak";
 ///
 /// 每个安装实例包含目标文件路径和人类可读的描述信息。
 /// 安装类型信息已包含在 description 字段中（如 "Bun 官方安装"、"npm 全局安装"）。
+/// `pub(super)` 供 `restore_toolsearch` 模块复用。
 #[derive(Debug)]
-struct Installation {
+pub(super) struct Installation {
     /// 需要补丁的目标文件的绝对路径
-    target: PathBuf,
+    pub(super) target: PathBuf,
     /// 人类可读的安装描述（如 "Bun 官方安装 (C:\Users\xxx\.local\bin\claude.exe)"）
-    description: String,
+    pub(super) description: String,
 }
 
 /// 单个安装的补丁结果
@@ -478,10 +480,12 @@ async fn apply_patch_to_installation(inst: &Installation) -> PatchResult {
 /// 3. 将临时文件重命名为原文件名
 /// 4. 删除 `.old` 文件
 ///
+/// `pub(super)` 供 `restore_toolsearch` 模块复用。
+///
 /// # 参数
 /// - `target` — 目标文件路径
 /// - `data` — 要写入的字节内容
-async fn write_patched_file(target: &Path, data: &[u8]) -> Result<(), String> {
+pub(super) async fn write_patched_file(target: &Path, data: &[u8]) -> Result<(), String> {
     // 尝试直接写入
     match tokio::fs::write(target, data).await {
         Ok(()) => return Ok(()),
@@ -540,8 +544,10 @@ async fn write_patched_file(target: &Path, data: &[u8]) -> Result<(), String> {
 /// - pnpm 全局安装
 /// - VS Code / Cursor 扩展捆绑
 ///
+/// `pub(super)` 供 `restore_toolsearch` 模块复用。
+///
 /// 返回所有探测到的安装列表。
-async fn find_all_installations() -> Vec<Installation> {
+pub(super) async fn find_all_installations() -> Vec<Installation> {
     let mut all: Vec<Installation> = Vec::new();
 
     // 依次探测各种安装方式
