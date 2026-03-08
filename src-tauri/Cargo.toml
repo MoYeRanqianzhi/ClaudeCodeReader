@@ -28,7 +28,8 @@ tauri-plugin-shell = "2"
 # Windows 用 Shell COM API，macOS 用 NSWorkspace，Linux 用 D-Bus
 tauri-plugin-opener = "2"
 # 异步文件 I/O：利用 Tauri 自带的 tokio runtime 进行并行文件扫描
-tokio = { version = "1", features = ["fs", "rt", "sync", "time", "net", "macros"] }
+# process feature 用于 ToolSearch 修复项异步执行 npm/pnpm 命令探测安装路径
+tokio = { version = "1", features = ["fs", "rt", "sync", "time", "net", "macros", "process"] }
 # 跨平台主目录获取：用于定位 ~/.claude/ 和 ~/.mo/CCR/ 目录
 dirs = "6"
 # 正则表达式：仅用于计划执行消息检测（2 个预编译模式）
