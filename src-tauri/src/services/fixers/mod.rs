@@ -24,6 +24,7 @@
 //!
 //! 详细指南请参考 `docs/development/fixers-guide.md`。
 
+pub mod patch_anyrouter;
 pub mod patch_toolsearch;
 pub mod restore_toolsearch;
 pub mod strip_thinking;
@@ -206,6 +207,12 @@ pub fn all_fixers() -> Vec<FixerEntry> {
         FixerEntry {
             definition: restore_toolsearch::definition,
             executor: FixerExecutor::Full(restore_toolsearch::execute),
+        },
+        // 修复 #4：AnyRouter 400 (no body) 错误修复（Full 档位）
+        // 修改 ~/.claude/settings.json 禁用不兼容的实验功能
+        FixerEntry {
+            definition: patch_anyrouter::definition,
+            executor: FixerExecutor::Full(patch_anyrouter::execute),
         },
     ]
 }
