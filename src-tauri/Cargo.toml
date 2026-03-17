@@ -53,3 +53,8 @@ http = "1"
 bytes = "1"
 # 异步流处理：SSE 流式响应的 StreamExt trait
 futures-util = "0.3"
+# === 项目回溯功能 ===
+# LRU 缓存：缓存回放计算的文件系统快照
+lru = "0.12"
+# ZIP 压缩：批量导出当前快照为 ZIP 文件
+zip = { version = "2", default-features = false, features = ["deflate"] }

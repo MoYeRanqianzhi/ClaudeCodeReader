@@ -684,3 +684,71 @@
 .dark ::-webkit-scrollbar-thumb:hover {
   background: #7c5cbf;
 }
+
+/* ==========================================================================
+   项目回溯：时间轴滑块样式
+   自定义 range slider 的外观，使其与项目主色调一致。
+   通过 CSS 变量 var(--primary) 和 var(--background) 实现深色模式自动适配。
+   ========================================================================== */
+
+/* Range slider 轨道和滑块的自定义样式（覆盖浏览器默认外观） */
+.retrospect-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  height: 8px;
+  border-radius: 4px;
+}
+
+/* Webkit (Chrome/Edge) 滑块按钮 */
+.retrospect-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--primary);
+  border: 3px solid var(--background);
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  margin-top: -6px;
+}
+
+/* Webkit 轨道样式（背景色由 inline style 的 linear-gradient 控制） */
+.retrospect-slider::-webkit-slider-runnable-track {
+  height: 8px;
+  border-radius: 4px;
+  background: transparent;
+}
+
+/* 滑块悬停效果：放大 + 主色调光晕 */
+.retrospect-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+  box-shadow: 0 4px 10px color-mix(in srgb, var(--primary) 30%, transparent);
+}
+
+/* 滑块按下效果：轻微收缩 */
+.retrospect-slider:active::-webkit-slider-thumb {
+  transform: scale(1.05);
+}
+
+/* Firefox 滑块按钮 */
+.retrospect-slider::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--primary);
+  border: 3px solid var(--background);
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  box-sizing: border-box;
+}
+
+/* Firefox 轨道样式 */
+.retrospect-slider::-moz-range-track {
+  height: 8px;
+  border-radius: 4px;
+  background: transparent;
+}

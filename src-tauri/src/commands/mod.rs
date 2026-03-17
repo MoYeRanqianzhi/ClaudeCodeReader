@@ -10,5 +10,6 @@
 pub mod messages;
 pub mod projects;
 pub mod proxy;
+pub mod retrospect;
 pub mod settings;
 pub mod tools;

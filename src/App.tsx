@@ -17,6 +17,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { AnimatePresence } from 'motion/react';
 import { Sidebar, ChatView, SettingsPanel, ProxyPanel } from './components';
+import { RetrospectView } from './components/retrospect/RetrospectView';
 import type { Project, Session, ClaudeSettings, EnvSwitcherConfig, EnvProfile, TransformedSession } from './types/claude';
 import {
   getClaudeDataPath,
@@ -94,6 +95,8 @@ function App() {
   const [isResizingSidebar, setIsResizingSidebar] = useState(false);
   /** 中转抓包面板可见性：为 true 时显示 ProxyPanel 替代 ChatView */
   const [showProxyPanel, setShowProxyPanel] = useState(false);
+  /** 项目回溯视图可见性：为 true 时显示 RetrospectView 替代 ChatView */
+  const [showRetrospect, setShowRetrospect] = useState(false);
   /** 使用 ref 追踪拖动状态，避免全局事件监听器中的闭包陈旧问题 */
   const isResizingRef = useRef(false);
 
@@ -739,8 +742,15 @@ function App() {
         />
       )}
 
-      {/* 主内容区：聊天消息展示（或中转抓包面板） */}
-      {showProxyPanel ? (
+      {/* 主内容区：回溯视图 / 中转抓包面板 / 聊天消息展示（三级条件渲染） */}
+      {showRetrospect ? (
+        <RetrospectView
+          claudeDataPath={claudeDataPath}
+          projectName={currentProject?.name || ''}
+          projectPath={currentProject?.path || ''}
+          onClose={() => setShowRetrospect(false)}
+        />
+      ) : showProxyPanel ? (
         <ProxyPanel
           onClose={() => setShowProxyPanel(false)}
           sidebarCollapsed={sidebarCollapsed}
@@ -769,6 +779,7 @@ function App() {
           onNavigateBack={handleNavigateBack}
           onNavigateToSession={handleNavigateToSession}
           onOpenProxyPanel={() => setShowProxyPanel(true)}
+          onOpenRetrospect={currentProject ? () => setShowRetrospect(true) : undefined}
         />
       )}
 

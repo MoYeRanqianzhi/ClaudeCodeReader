@@ -23,6 +23,7 @@ mod utils;
 
 use commands::proxy::ProxyState;
 use services::cache::AppCache;
+use services::retrospect::RetrospectState;
 
 // `#[cfg_attr(mobile, tauri::mobile_entry_point)]`：条件编译属性
 // 当目标平台为移动端（Android/iOS）时，此属性将 `run()` 函数标记为
@@ -63,6 +64,8 @@ pub fn run() {
         .manage(AppCache::new())
         // 注册 ProxyState 为代理全局状态
         .manage(ProxyState::new())
+        // 注册 RetrospectState 为项目回溯全局状态
+        .manage(RetrospectState::new())
         // === 自定义 Tauri Commands 注册 ===
         // 所有 command 函数通过 `invoke_handler` 注册，前端通过 `invoke()` 调用
         .invoke_handler(tauri::generate_handler![
@@ -109,6 +112,13 @@ pub fn run() {
             commands::proxy::clear_proxy_records,
             commands::proxy::export_proxy_records,
             commands::proxy::check_proxy_recovery,
+            // 项目回溯 commands
+            commands::retrospect::retrospect_init,
+            commands::retrospect::retrospect_file_tree,
+            commands::retrospect::retrospect_file_content,
+            commands::retrospect::retrospect_save_file,
+            commands::retrospect::retrospect_export_zip,
+            commands::retrospect::retrospect_cleanup,
         ])
         // `setup` 闭包：在应用窗口创建之前执行的初始化钩子
         .setup(|app| {

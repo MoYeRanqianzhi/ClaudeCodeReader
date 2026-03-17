@@ -19,7 +19,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   ChevronRight, ChevronDown, ChevronUp, X, CheckSquare, Square, Filter,
   Download, FileText, FileJson, RefreshCw, ArrowLeft, Plus,
-  Copy, Edit2, Trash2, Bot, User, Lightbulb, Wrench, Archive, Terminal, ExternalLink, Search, Globe
+  Copy, Edit2, Trash2, Bot, User, Lightbulb, Wrench, Archive, Terminal, ExternalLink, Search, Globe, History
 } from 'lucide-react';
 import type { Session, Project, DisplayMessage, TransformedSession, ToolUseInfo, SearchHighlight } from '../types/claude';
 import { formatTimestamp, searchSession, openResumeTerminal, insertMessage } from '../utils/claudeData';
@@ -86,6 +86,8 @@ interface ChatViewProps {
   onNavigateToSession: (encodedProject: string, sessionId: string) => Promise<boolean>;
   /** 打开中转抓包面板的回调 */
   onOpenProxyPanel?: () => void;
+  /** 打开项目回溯视图的回调 */
+  onOpenRetrospect?: () => void;
 }
 
 /** 展开/收起动画的过渡参数 */
@@ -824,6 +826,7 @@ export function ChatView({
   onNavigateBack,
   onNavigateToSession,
   onOpenProxyPanel,
+  onOpenRetrospect,
 }: ChatViewProps) {
   /** 当前正在编辑的消息 displayId，为 null 表示没有消息处于编辑状态 */
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -1673,6 +1676,23 @@ export function ChatView({
                   >
                     <Globe className="w-4 h-4" />
                     <span>中转抓包</span>
+                  </button>
+                  {/* 项目回溯：打开回溯视图（未选中项目时禁用） */}
+                  <button
+                    onClick={() => {
+                      if (!onOpenRetrospect) return;
+                      setShowToolsDropdown(false);
+                      onOpenRetrospect();
+                    }}
+                    disabled={!onOpenRetrospect}
+                    className={`w-full flex items-center gap-2 px-3 py-2 text-sm transition-colors ${
+                      onOpenRetrospect
+                        ? 'hover:bg-accent/50'
+                        : 'opacity-40 cursor-not-allowed'
+                    }`}
+                  >
+                    <History className="w-4 h-4" />
+                    <span>项目回溯</span>
                   </button>
                 </motion.div>
               )}
