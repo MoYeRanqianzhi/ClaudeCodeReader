@@ -597,7 +597,7 @@ dependencies = [
 
 [[package]]
 name = "claude-code-reader"
-version = "2.3.2-rc.1"
+version = "2.4.0-rc.1"
 dependencies = [
  "bytes",
  "dirs",
