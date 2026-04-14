@@ -481,6 +481,19 @@ export async function openResumeTerminal(projectPath: string, sessionId: string)
   return invoke<void>('open_resume_terminal', { projectPath, sessionId });
 }
 
+/**
+ * 构建 resume 命令字符串（不执行）
+ *
+ * 调用 Rust 后端构建完整的 `claude --resume <sessionId> <flags> <customArgs>` 命令，
+ * 返回字符串供前端复制到剪贴板。
+ *
+ * @param sessionId - 会话 UUID
+ * @returns 完整的 resume 命令字符串
+ */
+export async function buildResumeCommand(sessionId: string): Promise<string> {
+  return invoke<string>('build_resume_command', { sessionId });
+}
+
 // ============ 备份配置 ============
 
 /**
@@ -656,4 +669,111 @@ export async function exportProxyRecords(): Promise<string> {
  */
 export async function checkProxyRecovery(): Promise<boolean> {
   return invoke<boolean>('check_proxy_recovery');
+}
+
+// ==================== 宠物管理 ====================
+
+import type { Companion, CompanionBones, PetActionResult } from '../types/pet';
+import type { SkillInfo, SkillDetail, PluginInfo, MarketplaceInfo, PluginActionResult } from '../types/claude';
+
+/**
+ * 获取当前宠物的完整信息
+ *
+ * 从 ~/.claude.json 读取已孵化的宠物数据，
+ * 合并确定性骨架和持久化灵魂后返回。
+ *
+ * @returns 宠物信息，如果尚未孵化则返回 null
+ */
+export async function getCompanion(): Promise<Companion | null> {
+  return invoke<Companion | null>('get_companion');
+}
+
+/**
+ * 清除宠物记录
+ *
+ * 删除 ~/.claude.json 中的 companion 字段，
+ * 之后用户在 Claude Code 中执行 /buddy 可重新孵化。
+ *
+ * @returns 操作结果（成功/失败 + 消息）
+ */
+export async function clearCompanion(): Promise<PetActionResult> {
+  return invoke<PetActionResult>('clear_companion');
+}
+
+/**
+ * 预览当前用户的宠物骨架
+ *
+ * 仅根据 userId 计算骨架属性，不需要宠物已孵化。
+ *
+ * @returns 骨架信息（种族、稀有度、属性等）
+ */
+export async function previewCompanionBones(): Promise<CompanionBones> {
+  return invoke<CompanionBones>('preview_companion_bones');
+}
+
+// ============ Skills 管理 ============
+
+/**
+ * 列出所有可用的 Skills
+ *
+ * 扫描用户级和项目级 skills 目录，返回去重后的完整列表。
+ * 对应 Rust 后端的 `list_skills` command 和 Claude Code 源码的 `getSkillDirCommands()`。
+ *
+ * @param projectPath - 可选的项目根目录路径，提供时扫描项目级 skills
+ * @returns 所有发现的 skill 信息列表
+ */
+export async function listSkills(projectPath?: string): Promise<SkillInfo[]> {
+  return invoke<SkillInfo[]>('list_skills', { projectPath: projectPath ?? null });
+}
+
+/**
+ * 获取指定 Skill 的详细信息
+ *
+ * 读取 SKILL.md 的完整内容，包含 frontmatter 和 markdown prompt。
+ * 仅在用户点击查看详情时按需调用。
+ *
+ * @param sourcePath - SKILL.md 文件的完整路径（从 SkillInfo.sourcePath 获取）
+ * @returns 包含完整内容的 skill 详情
+ */
+export async function getSkillDetail(sourcePath: string): Promise<SkillDetail> {
+  return invoke<SkillDetail>('get_skill_detail', { sourcePath });
+}
+
+// ============ Plugins 管理 ============
+
+/**
+ * 列出所有已安装的插件
+ *
+ * 聚合 installed_plugins.json、settings.json 和 plugin.json 的信息，
+ * 返回完整的 PluginInfo 列表。
+ *
+ * @returns 已安装插件的完整信息列表
+ */
+export async function listPlugins(): Promise<PluginInfo[]> {
+  return invoke<PluginInfo[]>('list_plugins');
+}
+
+/**
+ * 切换插件的启用/禁用状态
+ *
+ * 修改 settings.json 中的 enabledPlugins 字段。
+ * 与 Claude Code CLI 的 `claude plugin enable/disable` 效果一致。
+ *
+ * @param pluginId - 插件 ID（格式："plugin-name@marketplace-name"）
+ * @param enabled - 是否启用
+ * @returns 操作结果
+ */
+export async function togglePlugin(pluginId: string, enabled: boolean): Promise<PluginActionResult> {
+  return invoke<PluginActionResult>('toggle_plugin', { pluginId, enabled });
+}
+
+/**
+ * 列出已知的 marketplaces
+ *
+ * 从 known_marketplaces.json 读取已注册的 marketplace 列表。
+ *
+ * @returns marketplace 信息列表
+ */
+export async function listMarketplaces(): Promise<MarketplaceInfo[]> {
+  return invoke<MarketplaceInfo[]>('list_marketplaces');
 }

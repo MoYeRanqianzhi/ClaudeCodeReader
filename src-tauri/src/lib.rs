@@ -94,6 +94,7 @@ pub fn run() {
             commands::tools::read_resume_config,
             commands::tools::save_resume_config,
             commands::tools::open_resume_terminal,
+            commands::tools::build_resume_command,
             commands::tools::read_backup_config,
             commands::tools::save_backup_config,
             commands::tools::get_temp_backups,
@@ -119,6 +120,17 @@ pub fn run() {
             commands::retrospect::retrospect_save_file,
             commands::retrospect::retrospect_export_zip,
             commands::retrospect::retrospect_cleanup,
+            // Skills 管理 commands
+            commands::skill::list_skills,
+            commands::skill::get_skill_detail,
+            // 宠物管理 commands
+            commands::pet::get_companion,
+            commands::pet::clear_companion,
+            commands::pet::preview_companion_bones,
+            // Plugins 管理 commands
+            commands::plugin::list_plugins,
+            commands::plugin::toggle_plugin,
+            commands::plugin::list_marketplaces,
         ])
         // `setup` 闭包：在应用窗口创建之前执行的初始化钩子
         .setup(|app| {

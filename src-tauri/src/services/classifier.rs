@@ -4,14 +4,16 @@
 //! 与前端 `messageTransform.ts` 的分类逻辑完全等价，但利用 Rust 原生性能。
 //!
 //! ## 分类优先级
-//! 1. type 字段过滤：非 user/assistant → Skip
+//! 1. type 字段过滤：非 user/assistant/attachment/system → Skip
 //! 2. assistant → Assistant
-//! 3. isCompactSummary → CompactSummary
-//! 4. `<command-name>` 配对标签 → SlashCommand
-//! 5. 字段级系统消息（isMeta / sourceToolUseID / caller）→ System
-//! 6. 语义级系统消息（计划执行）→ System
-//! 7. 内容级系统消息（协议 XML 标签配对验证）→ System
-//! 8. 默认 → User
+//! 3. attachment → Attachment（v0.4.0 新增）
+//! 4. system → SystemEntry（v0.4.0 新增，type="system" 的消息条目）
+//! 5. isCompactSummary → CompactSummary
+//! 6. `<command-name>` 配对标签 → SlashCommand
+//! 7. 字段级系统消息（isMeta / sourceToolUseID / caller）→ System
+//! 8. 语义级系统消息（计划执行）→ System
+//! 9. 内容级系统消息（协议 XML 标签配对验证）→ System
+//! 10. 默认 → User
 //!
 //! ## 性能策略
 //! - 零 regex（7 个标签检查）：使用 `str::strip_prefix` + `str::contains`
@@ -30,10 +32,16 @@ use serde_json::Value;
 /// 每种分类决定了后续 `transformer` 如何构建 `DisplayMessage`
 #[derive(Debug)]
 pub enum Classification {
-    /// 跳过：非 user/assistant 类型（file-history-snapshot, queue-operation 等）
+    /// 跳过：非对话消息类型（file-history-snapshot, queue-operation, custom-title, tag 等元数据条目）
     Skip,
     /// 助手消息：直接映射
     Assistant,
+    /// 附件消息（v0.4.0 新增）：type="attachment" 的消息，参与对话链
+    /// 按照源码定义，附件消息是对话的一部分（有 uuid 和 parentUuid）
+    Attachment,
+    /// 系统类型消息（v0.4.0 新增）：type="system" 的消息条目
+    /// 注意：这不同于 System 分类——System 分类是 type="user" 但被检测为系统注入的消息
+    SystemEntry,
     /// 压缩摘要：isCompactSummary 为 true 的 user 消息
     CompactSummary,
     /// 斜杠命令：以 `<command-name>/xxx</command-name>` 开头的 user 消息
@@ -196,16 +204,18 @@ fn extract_text(msg: &Value) -> Cow<'_, str> {
 /// 优先级与前端 `messageTransform.ts` 的 `transformForDisplay` 完全一致。
 ///
 /// ## 分类优先级
-/// 1. type 不是 "user" 或 "assistant" → Skip
+/// 1. type 不是 "user"/"assistant"/"attachment"/"system" → Skip
 /// 2. type === "assistant" → Assistant
-/// 3. isCompactSummary === true → CompactSummary
-/// 4. `<command-name>/xxx</command-name>` 配对标签 → SlashCommand
-/// 5. isMeta === true → System("技能"/"系统")
-/// 6. sourceToolUseID 存在 → System("技能")
-/// 7. caller 存在 → System("系统")
-/// 8. 计划执行消息（三条件严格匹配）→ System("计划")
-/// 9. 系统 XML 标签配对验证 → System("系统")
-/// 10. 默认 → User
+/// 3. type === "attachment" → Attachment（v0.4.0 新增）
+/// 4. type === "system" → SystemEntry（v0.4.0 新增）
+/// 5. isCompactSummary === true → CompactSummary
+/// 6. `<command-name>/xxx</command-name>` 配对标签 → SlashCommand
+/// 7. isMeta === true → System("技能"/"系统")
+/// 8. sourceToolUseID 存在 → System("技能")
+/// 9. caller 存在 → System("系统")
+/// 10. 计划执行消息（三条件严格匹配）→ System("计划")
+/// 11. 系统 XML 标签配对验证 → System("系统")
+/// 12. 默认 → User
 ///
 /// # 参数
 /// - `msg` - 原始消息 `serde_json::Value`
@@ -219,14 +229,28 @@ pub fn classify(msg: &Value) -> Classification {
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
-    // P0：过滤非聊天消息（file-history-snapshot, queue-operation, custom-title, tag）
-    if msg_type != "user" && msg_type != "assistant" {
-        return Classification::Skip;
+    // P0：过滤非对话消息（file-history-snapshot, queue-operation, custom-title, tag 等元数据条目）
+    // v0.4.0：新增 attachment 和 system 类型的支持
+    match msg_type {
+        "user" | "assistant" | "attachment" | "system" => {}
+        _ => return Classification::Skip,
     }
 
     // P1：assistant 消息直接映射
     if msg_type == "assistant" {
         return Classification::Assistant;
+    }
+
+    // P1.5（v0.4.0 新增）：attachment 消息——参与对话链的附件消息
+    if msg_type == "attachment" {
+        return Classification::Attachment;
+    }
+
+    // P1.6（v0.4.0 新增）：system 类型消息条目
+    // 注意：type="system" 是消息条目类型（参与对话链），
+    // 与 Classification::System（type="user" 但被检测为系统注入的消息）不同
+    if msg_type == "system" {
+        return Classification::SystemEntry;
     }
 
     // ---- 以下均为 user 消息的分类 ----

@@ -6,10 +6,16 @@
 //! - `messages` - 消息的读取、编辑、删除相关 commands
 //! - `settings` - 设置和环境配置的读写 commands
 //! - `tools` - 实用工具相关 commands（一键 Resume 等）
+//! - `skill` - Skills 管理相关 commands（扫描、查看详情）
+//! - `pet` - 宠物管理相关 commands（查看、清除宠物）
+//! - `plugin` - Plugins 管理相关 commands（列表、启用/禁用、marketplace）
 
 pub mod messages;
+pub mod pet;
+pub mod plugin;
 pub mod projects;
 pub mod proxy;
 pub mod retrospect;
 pub mod settings;
+pub mod skill;
 pub mod tools;

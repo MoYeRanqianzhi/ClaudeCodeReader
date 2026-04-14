@@ -2,6 +2,7 @@
 //!
 //! 提供实用工具相关的 Tauri command 处理函数：
 //! - `read_resume_config` / `save_resume_config` - 一键 Resume 配置读写
+//! - `build_resume_command` - 构建 resume 命令字符串（供复制到剪贴板）
 //! - `open_resume_terminal` - 打开终端执行 claude --resume 命令
 //! - `read_backup_config` / `save_backup_config` - 备份配置读写
 //! - `get_temp_backups` - 获取本次运行期间的临时备份列表
@@ -117,6 +118,54 @@ pub async fn save_resume_config(config: ResumeConfig) -> Result<(), String> {
         .map_err(|e| format!("写入 Resume 配置文件失败: {}", e))
 }
 
+/// 内部函数：根据 session_id 和用户配置构建完整的 resume 命令字符串
+///
+/// 读取 `~/.mo/CCR/resume-config.json` 中的 flags 和自定义参数，
+/// 拼接为 `claude --resume <session_id> <flags> <custom_args>` 格式。
+///
+/// 供 `open_resume_terminal` 和 `build_resume_command` 共同复用。
+async fn build_resume_command_string(session_id: String) -> String {
+    // 读取 Resume 配置
+    let config = read_resume_config_internal().await;
+
+    // 拼接 claude 命令各部分
+    let mut cmd_parts: Vec<String> = vec![
+        "claude".to_string(),
+        "--resume".to_string(),
+        session_id,
+    ];
+
+    // 追加勾选的 flags
+    for flag in &config.flags {
+        cmd_parts.push(flag.clone());
+    }
+
+    // 追加自定义参数（按空格分割，过滤空字符串）
+    let custom_trimmed = config.custom_args.trim();
+    if !custom_trimmed.is_empty() {
+        for part in custom_trimmed.split_whitespace() {
+            cmd_parts.push(part.to_string());
+        }
+    }
+
+    cmd_parts.join(" ")
+}
+
+/// 构建 resume 命令字符串（不执行，仅返回）
+///
+/// 供前端「复制 Resume 指令」功能使用，返回完整的命令字符串，
+/// 用户可将其粘贴到终端手动执行。
+///
+/// # 参数
+/// - `session_id` - 会话 UUID
+///
+/// # 返回值
+/// 完整的 `claude --resume <session_id> <flags> <custom_args>` 命令字符串
+#[tauri::command]
+pub async fn build_resume_command(session_id: String) -> Result<String, String> {
+    Ok(build_resume_command_string(session_id).await)
+}
+
 /// 打开系统终端并执行 claude --resume 命令
 ///
 /// 根据当前操作系统平台，打开对应的终端模拟器，
@@ -141,32 +190,10 @@ pub async fn open_resume_terminal(
     project_path: String,
     session_id: String,
 ) -> Result<(), String> {
-    // 1. 读取 Resume 配置
-    let config = read_resume_config_internal().await;
+    // 1. 构建完整的 resume 命令字符串
+    let full_command = build_resume_command_string(session_id).await;
 
-    // 2. 拼接 claude 命令
-    let mut cmd_parts: Vec<String> = vec![
-        "claude".to_string(),
-        "--resume".to_string(),
-        session_id,
-    ];
-
-    // 追加勾选的 flags
-    for flag in &config.flags {
-        cmd_parts.push(flag.clone());
-    }
-
-    // 追加自定义参数（按空格分割，过滤空字符串）
-    let custom_trimmed = config.custom_args.trim();
-    if !custom_trimmed.is_empty() {
-        for part in custom_trimmed.split_whitespace() {
-            cmd_parts.push(part.to_string());
-        }
-    }
-
-    let full_command = cmd_parts.join(" ");
-
-    // 3. 按平台打开终端
+    // 2. 按平台打开终端
     open_terminal_with_command(&project_path, &full_command)
 }
 

@@ -137,10 +137,14 @@ pub fn transform_session(messages: &[Value]) -> (TransformedSession, Vec<String>
     )
 }
 
-/// 从 assistant 消息的 content 数组中提取所有 tool_use 块的信息
+/// 从 assistant 消息的 content 数组中提取所有 tool_use 和 server_tool_use 块的信息
 ///
-/// 遍历 `message.content` 数组，对每个 `type === "tool_use"` 的块，
+/// 遍历 `message.content` 数组，对每个 `type === "tool_use"` 或 `type === "server_tool_use"` 的块，
 /// 提取其 `id`、`name`、`input` 字段。
+///
+/// v0.4.0 新增：支持 `server_tool_use` 类型块（如 web_search、web_fetch 等服务端工具）。
+/// `server_tool_use` 的结构与 `tool_use` 相同（均有 id, name, input），
+/// 但由 Claude API 服务端执行而非本地执行。
 ///
 /// # 参数
 /// - `msg` - 原始消息 Value
@@ -163,7 +167,9 @@ fn extract_tool_uses(msg: &Value) -> Vec<(String, ToolUseInfo)> {
 
     let mut result = Vec::new();
     for block in arr {
-        if block.get("type").and_then(|v| v.as_str()) == Some("tool_use") {
+        let block_type = block.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        // v0.4.0：同时匹配 tool_use 和 server_tool_use
+        if block_type == "tool_use" || block_type == "server_tool_use" {
             if let Some(id) = block.get("id").and_then(|v| v.as_str()) {
                 let name = block
                     .get("name")
@@ -273,6 +279,52 @@ fn build_display_messages(
                 tool_use_result,
                 todos,
                 system_label: None,
+                plan_source_path: None,
+                cwd,
+                is_abandoned,
+            });
+        }
+
+        Classification::Attachment => {
+            // v0.4.0 新增：附件消息
+            // 附件消息参与对话链（有 uuid 和 parentUuid），作为系统消息类型展示
+            let (blocks, block_map) = content_to_blocks(content_val);
+            out.push(DisplayMessage {
+                source_uuid: uuid.clone(),
+                display_id: uuid,
+                display_type: "system".into(),
+                timestamp,
+                content: blocks,
+                editable: false,
+                block_index_map: block_map,
+                model: None,
+                usage: None,
+                tool_use_result: None,
+                todos: None,
+                system_label: Some("附件".into()),
+                plan_source_path: None,
+                cwd,
+                is_abandoned,
+            });
+        }
+
+        Classification::SystemEntry => {
+            // v0.4.0 新增：type="system" 的消息条目
+            // 与 Classification::System 不同：这是 JSONL 条目类型为 "system" 的消息
+            let (blocks, block_map) = content_to_blocks(content_val);
+            out.push(DisplayMessage {
+                source_uuid: uuid.clone(),
+                display_id: uuid,
+                display_type: "system".into(),
+                timestamp,
+                content: blocks,
+                editable: false,
+                block_index_map: block_map,
+                model: None,
+                usage: None,
+                tool_use_result: None,
+                todos: None,
+                system_label: Some("系统".into()),
                 plan_source_path: None,
                 cwd,
                 is_abandoned,
@@ -526,6 +578,8 @@ fn build_user_display_messages(
 /// - thinking 块 → thinking 字段
 /// - tool_result 块 → content 字段（字符串或嵌套数组）
 /// - tool_use 块 → input 字段（序列化为 JSON 字符串）
+/// - server_tool_use 块 → input 字段（v0.4.0 新增，同 tool_use 处理）
+/// - web_search_tool_result 块 → content 字段（v0.4.0 新增，搜索结果内容）
 ///
 /// 结果保留原始大小写（不做小写化），用于：
 /// 1. 大小写敏感搜索模式（直接使用）
@@ -543,6 +597,8 @@ fn build_user_display_messages(
 fn extract_search_text_original(content: &[Value]) -> String {
     let mut buf = String::new();
     for block in content {
+        let block_type = block.get("type").and_then(|v| v.as_str()).unwrap_or("");
+
         // text 块：提取 text 字段
         if let Some(t) = block.get("text").and_then(|v| v.as_str()) {
             buf.push_str(t);
@@ -553,7 +609,7 @@ fn extract_search_text_original(content: &[Value]) -> String {
             buf.push_str(t);
             buf.push('\n');
         }
-        // tool_result 嵌套内容：content 字段（字符串或数组）
+        // tool_result / web_search_tool_result 嵌套内容：content 字段（字符串或数组）
         if let Some(c) = block.get("content") {
             if let Some(s) = c.as_str() {
                 buf.push_str(s);
@@ -568,8 +624,9 @@ fn extract_search_text_original(content: &[Value]) -> String {
                 }
             }
         }
-        // tool_use 块：将 input 序列化为 JSON 字符串
-        if block.get("type").and_then(|v| v.as_str()) == Some("tool_use") {
+        // tool_use / server_tool_use 块：将 input 序列化为 JSON 字符串
+        // v0.4.0：新增 server_tool_use 支持
+        if block_type == "tool_use" || block_type == "server_tool_use" {
             if let Some(input) = block.get("input") {
                 buf.push_str(&input.to_string());
                 buf.push('\n');

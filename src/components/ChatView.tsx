@@ -19,10 +19,11 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   ChevronRight, ChevronDown, ChevronUp, X, CheckSquare, Square, Filter,
   Download, FileText, FileJson, RefreshCw, ArrowLeft, Plus,
-  Copy, Edit2, Trash2, Bot, User, Lightbulb, Wrench, Archive, Terminal, ExternalLink, Search, Globe, History
+  Copy, Edit2, Trash2, Bot, User, Lightbulb, Wrench, Archive, Terminal, ExternalLink, Search, Globe, History,
+  ClipboardCopy, Sparkles, Zap, Package
 } from 'lucide-react';
 import type { Session, Project, DisplayMessage, TransformedSession, ToolUseInfo, SearchHighlight } from '../types/claude';
-import { formatTimestamp, searchSession, openResumeTerminal, insertMessage } from '../utils/claudeData';
+import { formatTimestamp, searchSession, openResumeTerminal, buildResumeCommand, insertMessage } from '../utils/claudeData';
 import { parseJsonlPath } from '../utils/messageTransform';
 import { MessageBlockList } from './MessageBlockList';
 import { MessageContentRenderer } from './MessageContentRenderer';
@@ -30,6 +31,9 @@ import { useProgressiveRender } from '../hooks/useProgressiveRender';
 import { useCollapsible } from '../hooks/useCollapsible';
 import { NavSearchBar, type SearchRequest, type NavSearchBarHandle } from './NavSearchBar';
 import { QuickFixModal } from './QuickFixModal';
+import { PetManager } from './PetManager';
+import { SkillsManager } from './SkillsManager';
+import { PluginsManager } from './PluginsManager';
 import { MessageDropZone, _hoveredAfterUuid, resetHoveredAfterUuid } from './MessageDropZone';
 
 /**
@@ -853,6 +857,14 @@ export function ChatView({
   const [showToolsDropdown, setShowToolsDropdown] = useState(false);
   /** 控制一键修复弹窗的显示/隐藏状态 */
   const [showQuickFix, setShowQuickFix] = useState(false);
+  /** 控制宠物管理弹窗的显示/隐藏状态 */
+  const [showPetManager, setShowPetManager] = useState(false);
+  /** 控制 Skills 管理面板的显示/隐藏状态 */
+  const [showSkillsManager, setShowSkillsManager] = useState(false);
+  /** 控制 Plugins 管理面板的显示/隐藏状态 */
+  const [showPluginsManager, setShowPluginsManager] = useState(false);
+  /** 「复制 Resume 指令」的 toast 提示文本，非空时显示 */
+  const [resumeCopyToast, setResumeCopyToast] = useState('');
 
   // ==================== 拖拽添加消息状态 ====================
   /** 是否正在拖拽 Add 图标（全局拖拽状态，传递给所有 MessageDropZone） */
@@ -1655,6 +1667,27 @@ export function ChatView({
                     <Terminal className="w-4 h-4" />
                     <span>一键 Resume</span>
                   </button>
+                  {/* 复制 Resume 指令：将命令字符串复制到剪贴板 */}
+                  <button
+                    onClick={async () => {
+                      setShowToolsDropdown(false);
+                      if (!session) return;
+                      try {
+                        const cmd = await buildResumeCommand(session.id);
+                        await navigator.clipboard.writeText(cmd);
+                        setResumeCopyToast('已复制');
+                        setTimeout(() => setResumeCopyToast(''), 2000);
+                      } catch (err) {
+                        console.error('复制 Resume 指令失败:', err);
+                        setResumeCopyToast('复制失败');
+                        setTimeout(() => setResumeCopyToast(''), 2000);
+                      }
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent/50 transition-colors"
+                  >
+                    <ClipboardCopy className="w-4 h-4" />
+                    <span>复制 Resume 指令</span>
+                  </button>
                   {/* 一键修复：打开修复弹窗 */}
                   <button
                     onClick={() => {
@@ -1693,6 +1726,39 @@ export function ChatView({
                   >
                     <History className="w-4 h-4" />
                     <span>项目回溯</span>
+                  </button>
+                  {/* 宠物管理：查看和管理 Claude Code 宠物 */}
+                  <button
+                    onClick={() => {
+                      setShowToolsDropdown(false);
+                      setShowPetManager(true);
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent/50 transition-colors"
+                  >
+                    <Sparkles className="w-4 h-4" />
+                    <span>宠物管理</span>
+                  </button>
+                  {/* Skills 管理：查看和管理 Claude Code Skills */}
+                  <button
+                    onClick={() => {
+                      setShowToolsDropdown(false);
+                      setShowSkillsManager(true);
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent/50 transition-colors"
+                  >
+                    <Zap className="w-4 h-4" />
+                    <span>Skills 管理</span>
+                  </button>
+                  {/* Plugins 管理：查看和管理 Claude Code Plugins */}
+                  <button
+                    onClick={() => {
+                      setShowToolsDropdown(false);
+                      setShowPluginsManager(true);
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent/50 transition-colors"
+                  >
+                    <Package className="w-4 h-4" />
+                    <span>Plugins 管理</span>
                   </button>
                 </motion.div>
               )}
@@ -2269,6 +2335,41 @@ export function ChatView({
             onClose={() => setShowQuickFix(false)}
             onSessionUpdate={onRefresh}
           />
+        )}
+      </AnimatePresence>
+
+      {/* 宠物管理弹窗 */}
+      <AnimatePresence>
+        {showPetManager && (
+          <PetManager
+            onClose={() => setShowPetManager(false)}
+          />
+        )}
+        {showSkillsManager && (
+          <SkillsManager
+            projectPath={projectPath || undefined}
+            onClose={() => setShowSkillsManager(false)}
+          />
+        )}
+        {showPluginsManager && (
+          <PluginsManager
+            onClose={() => setShowPluginsManager(false)}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* 复制 Resume 指令的 toast 提示 */}
+      <AnimatePresence>
+        {resumeCopyToast && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 20 }}
+            transition={{ duration: 0.2 }}
+            className="fixed bottom-6 left-1/2 -translate-x-1/2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm shadow-lg z-[100]"
+          >
+            {resumeCopyToast}
+          </motion.div>
         )}
       </AnimatePresence>
     </div>

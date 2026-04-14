@@ -112,12 +112,17 @@ export interface SessionMessage {
    * 消息类型，决定了该消息的用途和解析方式：
    * - 'user'：用户发送的消息（包含用户输入的文本或指令）
    * - 'assistant'：AI 助手的回复消息（包含模型生成的文本、工具调用等）
+   * - 'attachment'：附件消息（v0.4.0 新增，参与对话链）
+   * - 'system'：系统消息（v0.4.0 新增，参与对话链的系统类型消息）
    * - 'file-history-snapshot'：文件历史快照（记录某一时刻被追踪文件的备份状态，用于撤销操作）
    * - 'queue-operation'：队列操作标记（表示后台排队的操作，如等待中的 API 请求）
    * - 'custom-title'：自定义标题（用户为会话设置的自定义显示名称）
+   * - 'ai-title'：AI 生成标题（v0.4.0 新增，AI 自动生成的会话标题）
    * - 'tag'：标签标记（用于对会话或消息进行分类标注）
+   * - 'summary'：会话摘要（v0.4.0 新增）
+   * - 'last-prompt'：最后一条用户输入（v0.4.0 新增）
    */
-  type: 'user' | 'assistant' | 'file-history-snapshot' | 'queue-operation' | 'custom-title' | 'tag';
+  type: 'user' | 'assistant' | 'attachment' | 'system' | 'file-history-snapshot' | 'queue-operation' | 'custom-title' | 'ai-title' | 'tag' | 'summary' | 'last-prompt';
   /** 消息唯一标识符：UUID v4 格式，用于精确定位和操作单条消息 */
   uuid: string;
   /**
@@ -243,8 +248,12 @@ export interface MessageContent {
    * - 'tool_result'：工具结果块，包含工具执行后的返回结果
    * - 'image'：图片内容块，包含图片数据（通常为 Base64 编码）
    * - 'thinking'：思考内容块，包含 AI 的扩展思维（Extended Thinking）推理过程
+   * - 'redacted_thinking'：已编辑的思考内容块，包含被编辑的思维数据
+   * - 'server_tool_use'：服务端工具调用块（v0.4.0 新增），如 web_search、web_fetch 等
+   * - 'web_search_tool_result'：网页搜索结果块（v0.4.0 新增），包含搜索结果内容
+   * - 'citation'：引用块（v0.4.0 新增），包含引用来源信息
    */
-  type: 'text' | 'tool_use' | 'tool_result' | 'image' | 'thinking';
+  type: 'text' | 'tool_use' | 'tool_result' | 'image' | 'thinking' | 'redacted_thinking' | 'server_tool_use' | 'web_search_tool_result' | 'citation';
   /** 文本内容：当 type 为 'text' 时，存储实际的文本字符串 */
   text?: string;
   /**
@@ -356,11 +365,19 @@ export interface Project {
  *
  * 表示一次独立的 Claude Code 对话会话，对应一个 .jsonl 文件。
  * 每个会话包含若干条 SessionMessage 记录。
+ *
+ * ## v0.4.0 新增字段
+ * 通过 scanner 的 head+tail 轻量读取策略提取的元数据字段：
+ * summary、firstPrompt、gitBranch、cwd、tag、createdAt、fileSize、isSidechain
+ *
+ * ## 标题优先级
+ * `name` 字段按以下优先级填充：customTitle > aiTitle > lastPrompt
+ * 如果都不存在，前端可回退使用 summary 或 firstPrompt 作为显示文本。
  */
 export interface Session {
   /** 会话 ID：对应 JSONL 文件名（不含扩展名），通常是 UUID 格式 */
   id: string;
-  /** 会话名称：用户自定义的会话显示名称（可选，未设置时使用 ID 或首条消息） */
+  /** 会话名称：优先级 customTitle > aiTitle > lastPrompt（可选） */
   name?: string;
   /** 会话时间戳：基于 JSONL 文件的最后修改时间 */
   timestamp: Date;
@@ -368,6 +385,22 @@ export interface Session {
   messageCount: number;
   /** 文件路径：JSONL 文件的完整绝对路径，用于后续读取会话内容 */
   filePath: string;
+  /** 会话摘要：从 JSONL 尾部的 summary 条目中提取 */
+  summary?: string;
+  /** 首条用户消息文本：从 JSONL 头部第一条 user 消息中提取（最多 200 字符） */
+  firstPrompt?: string;
+  /** Git 分支名：从 JSONL 消息的 gitBranch 字段中提取（尾部优先） */
+  gitBranch?: string;
+  /** 工作目录：从 JSONL 头部消息的 cwd 字段中提取 */
+  cwd?: string;
+  /** 会话标签：从 JSONL 尾部的 tag 条目中提取 */
+  tag?: string;
+  /** 创建时间：从 JSONL 头部第一条消息的 timestamp 字段提取（ISO 8601） */
+  createdAt?: string;
+  /** 文件大小：JSONL 文件的字节数 */
+  fileSize?: number;
+  /** 是否为侧链会话：子 agent 或分支对话 */
+  isSidechain: boolean;
 }
 
 /**
@@ -514,6 +547,10 @@ export interface ToolUseInfo {
  *
  * 由 Rust 后端累加整个会话中所有 assistant 消息的 token 使用量，
  * 供前端在会话头部一次性展示总计数据。
+ *
+ * ## v0.4.0 新增字段
+ * - webSearchRequests：服务端网页搜索请求总次数
+ * - webFetchRequests：服务端网页获取请求总次数
  */
 export interface TokenStats {
   /** 输入 token 总数 */
@@ -524,6 +561,10 @@ export interface TokenStats {
   cacheCreationInputTokens: number;
   /** 缓存读取 token 总数 */
   cacheReadInputTokens: number;
+  /** 服务端网页搜索请求总次数（来自 usage.server_tool_use.web_search_requests） */
+  webSearchRequests: number;
+  /** 服务端网页获取请求总次数（来自 usage.server_tool_use.web_fetch_requests） */
+  webFetchRequests: number;
 }
 
 /**
@@ -752,3 +793,155 @@ export type InterceptResponseAction =
   | { type: 'forward' }
   | { type: 'forwardModified'; headers?: Record<string, string>; body?: string }
   | { type: 'drop'; statusCode: number };
+
+// ============================= Skills 系统类型 =============================
+
+/**
+ * Skill 来源类型
+ *
+ * 标识 skill 从哪个目录层级加载。
+ * 对应 Rust 后端 `models::skill::SkillSource` 枚举。
+ */
+export type SkillSource = 'user' | 'project' | 'legacyCommands' | 'managed' | 'bundled';
+
+/**
+ * Skill 信息摘要
+ *
+ * 用于列表展示的 skill 基本信息，不包含完整 markdown 内容。
+ * 对应 Rust 后端 `models::skill::SkillInfo` 结构体。
+ */
+export interface SkillInfo {
+  /** Skill 名称（目录名，用作 /skill-name 调用标识符） */
+  name: string;
+  /** 显示名称（frontmatter 中的 name 字段，可能与目录名不同） */
+  displayName?: string;
+  /** 描述文本 */
+  description: string;
+  /** 来源类型 */
+  source: SkillSource;
+  /** 来源文件的完整路径（SKILL.md 的绝对路径） */
+  sourcePath: string;
+  /** 是否允许用户通过 /skill-name 直接调用 */
+  userInvocable: boolean;
+  /** 模型覆盖（如 "haiku", "sonnet", "opus"） */
+  model?: string;
+  /** 执行上下文（"inline" 或 "fork"） */
+  context?: string;
+  /** 允许使用的工具列表 */
+  allowedTools: string[];
+  /** 使用场景说明 */
+  whenToUse?: string;
+  /** 版本号 */
+  version?: string;
+  /** 参数提示 */
+  argumentHint?: string;
+  /** 路径过滤模式 */
+  paths?: string[];
+}
+
+/**
+ * Skill 详情
+ *
+ * 包含完整 markdown 内容的 skill 信息。
+ * 对应 Rust 后端 `models::skill::SkillDetail` 结构体。
+ */
+export interface SkillDetail extends SkillInfo {
+  /** SKILL.md 的完整原始内容（包含 frontmatter） */
+  rawContent: string;
+  /** 去除 frontmatter 后的纯 markdown 内容 */
+  markdownContent: string;
+}
+
+// ============================= Plugins 系统类型 =============================
+
+/**
+ * 插件安装作用域
+ *
+ * 对应 Rust 后端 `models::plugin::PluginScope` 枚举。
+ */
+export type PluginScope = 'managed' | 'user' | 'project' | 'local';
+
+/**
+ * 插件作者信息
+ *
+ * 对应 Rust 后端 `models::plugin::PluginAuthor` 结构体。
+ */
+export interface PluginAuthor {
+  /** 作者/组织的显示名称 */
+  name: string;
+  /** 联系邮箱 */
+  email?: string;
+  /** 网站 URL */
+  url?: string;
+}
+
+/**
+ * 插件信息摘要
+ *
+ * 聚合了安装元数据、启用状态和清单信息的前端展示用数据结构。
+ * 对应 Rust 后端 `models::plugin::PluginInfo` 结构体。
+ */
+export interface PluginInfo {
+  /** 插件 ID（格式："plugin-name@marketplace-name"） */
+  id: string;
+  /** 插件名称 */
+  name: string;
+  /** 所属 marketplace 名称 */
+  marketplace: string;
+  /** 插件描述 */
+  description?: string;
+  /** 当前安装版本 */
+  version?: string;
+  /** 作者信息 */
+  author?: PluginAuthor;
+  /** 主页 URL */
+  homepage?: string;
+  /** 源码仓库 URL */
+  repository?: string;
+  /** 许可证 */
+  license?: string;
+  /** 关键词标签 */
+  keywords?: string[];
+  /** 是否已启用 */
+  enabled: boolean;
+  /** 安装作用域 */
+  scope: PluginScope;
+  /** 安装路径 */
+  installPath: string;
+  /** 安装时间（ISO 8601） */
+  installedAt?: string;
+  /** 最后更新时间（ISO 8601） */
+  lastUpdated?: string;
+}
+
+/**
+ * Marketplace 信息摘要
+ *
+ * 对应 Rust 后端 `models::plugin::MarketplaceInfo` 结构体。
+ */
+export interface MarketplaceInfo {
+  /** marketplace 名称 */
+  name: string;
+  /** 来源类型（如 "github", "npm", "local"） */
+  sourceType: string;
+  /** 来源详情（如 "anthropics/claude-plugins"） */
+  sourceDetail: string;
+  /** 本地缓存路径 */
+  installLocation: string;
+  /** 最后更新时间 */
+  lastUpdated: string;
+  /** 是否自动更新 */
+  autoUpdate: boolean;
+}
+
+/**
+ * 插件操作结果
+ *
+ * 对应 Rust 后端 `models::plugin::PluginActionResult` 结构体。
+ */
+export interface PluginActionResult {
+  /** 操作是否成功 */
+  success: boolean;
+  /** 结果消息 */
+  message: string;
+}

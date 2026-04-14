@@ -103,6 +103,11 @@ pub struct ToolUseInfo {
 ///
 /// 累加整个会话中所有 assistant 消息的 token 使用量，
 /// 供前端在会话头部一次性展示总计数据。
+///
+/// ## v0.4.0 新增字段
+/// - `web_search_requests`：服务端网页搜索请求次数
+/// - `web_fetch_requests`：服务端网页获取请求次数
+/// 这些来自 Claude API 新增的 `usage.server_tool_use` 嵌套对象。
 #[derive(Serialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct TokenStats {
@@ -114,10 +119,16 @@ pub struct TokenStats {
     pub cache_creation_input_tokens: u64,
     /// 缓存读取 token 总数
     pub cache_read_input_tokens: u64,
+    /// 服务端网页搜索请求总次数（来自 usage.server_tool_use.web_search_requests）
+    pub web_search_requests: u64,
+    /// 服务端网页获取请求总次数（来自 usage.server_tool_use.web_fetch_requests）
+    pub web_fetch_requests: u64,
 }
 
 impl TokenStats {
     /// 累加一条消息的 usage 数据到统计汇总中
+    ///
+    /// 处理标准 token 字段和新增的 `server_tool_use` 嵌套字段。
     ///
     /// # 参数
     /// - `usage` - 单条消息的 usage Value（可能为 None）
@@ -139,6 +150,19 @@ impl TokenStats {
                 .get("cache_read_input_tokens")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0);
+
+            // v0.4.0 新增：累加服务端工具使用统计
+            // 数据结构: usage.server_tool_use.web_search_requests / web_fetch_requests
+            if let Some(server_tool_use) = u.get("server_tool_use") {
+                self.web_search_requests += server_tool_use
+                    .get("web_search_requests")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                self.web_fetch_requests += server_tool_use
+                    .get("web_fetch_requests")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+            }
         }
     }
 }
