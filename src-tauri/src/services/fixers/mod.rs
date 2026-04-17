@@ -27,12 +27,14 @@
 pub mod patch_anyrouter;
 pub mod patch_toolsearch;
 pub mod restore_toolsearch;
+pub mod strip_images;
 pub mod strip_thinking;
 
 use std::future::Future;
 use std::pin::Pin;
 
 use serde::Serialize;
+use serde_json::Value;
 
 use crate::models::message::SessionMessage;
 use crate::services::cache::AppCache;
@@ -63,6 +65,43 @@ pub enum FixLevel {
     Full,
 }
 
+/// 修复选项参数的类型标识
+///
+/// 标识前端应渲染哪种输入控件。
+///
+/// 对应前端 TypeScript 类型：`FixOptionType`
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FixOptionType {
+    /// 数字输入框
+    Number,
+    /// 布尔开关
+    Boolean,
+}
+
+/// 修复选项参数定义
+///
+/// 描述一个修复项支持的可配置参数，前端据此渲染输入控件。
+/// 执行时前端将用户填写的值以 JSON 对象形式传递给后端。
+///
+/// 对应前端 TypeScript 接口：`FixOptionDef`
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FixOptionDef {
+    /// JSON 键名（如 "keep_last"），传递给 execute 时使用
+    pub key: String,
+    /// 显示标签（如 "保留最后 N 张图片"）
+    pub label: String,
+    /// 参数类型，决定前端渲染的控件
+    pub option_type: FixOptionType,
+    /// 默认值（序列化为 JSON）
+    pub default_value: Value,
+    /// 可选的补充说明
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
 /// 修复定义元数据
 ///
 /// 描述一个修复项的完整信息，通过 Tauri IPC 传递给前端展示。
@@ -84,6 +123,8 @@ pub struct FixDefinition {
     pub tags: Vec<String>,
     /// 修复档位级别，决定该修复项的权限范围和 UI 标注样式
     pub level: FixLevel,
+    /// 可配置的选项参数列表（为空表示无需参数）
+    pub options: Vec<FixOptionDef>,
 }
 
 /// 修复执行结果
@@ -111,40 +152,46 @@ pub type DefinitionFn = fn() -> FixDefinition;
 
 /// Entry 档位执行函数签名
 ///
-/// 接收可变消息列表引用，在原地修改消息条目。
+/// 接收可变消息列表引用和可选参数，在原地修改消息条目。
 /// 修复逻辑只负责操作数据，文件读写和备份由框架统一处理。
 ///
 /// # 参数
 /// - `messages` — 解析后的消息列表（可变引用）
+/// - `options` — 前端传递的可选参数（JSON 对象，无参数时为 Null）
 pub type EntryExecuteFn = for<'a> fn(
     &'a mut Vec<SessionMessage>,
+    &'a Value,
 ) -> Pin<Box<dyn Future<Output = Result<FixResult, String>> + Send + 'a>>;
 
 /// Content 档位执行函数签名
 ///
-/// 接收文件原始文本内容，返回修复结果和修改后的新内容。
+/// 接收文件原始文本内容和可选参数，返回修复结果和修改后的新内容。
 /// 文件读取和覆写由框架统一处理。
 ///
 /// # 参数
 /// - `content` — 文件的原始文本内容
+/// - `options` — 前端传递的可选参数
 ///
 /// # 返回值
 /// 元组 `(FixResult, String)`：修复结果 + 修改后的完整文件内容
 pub type ContentExecuteFn = for<'a> fn(
     &'a str,
+    &'a Value,
 ) -> Pin<Box<dyn Future<Output = Result<(FixResult, String), String>> + Send + 'a>>;
 
 /// File 档位执行函数签名
 ///
-/// 接收文件路径和 AppCache 引用，修复项自行进行文件操作。
+/// 接收文件路径、AppCache 引用和可选参数，修复项自行进行文件操作。
 /// 框架会预先验证路径在 `~/.claude/` 目录下。
 ///
 /// # 参数
 /// - `session_file_path` — 会话 JSONL 文件的绝对路径
 /// - `cache` — AppCache 引用，传递给 file_guard 的安全写入函数
+/// - `options` — 前端传递的可选参数
 pub type FileExecuteFn = for<'a> fn(
     &'a str,
     &'a AppCache,
+    &'a Value,
 ) -> Pin<Box<dyn Future<Output = Result<FixResult, String>> + Send + 'a>>;
 
 /// Full 档位执行函数签名
@@ -154,6 +201,7 @@ pub type FileExecuteFn = for<'a> fn(
 pub type FullExecuteFn = for<'a> fn(
     &'a str,
     &'a AppCache,
+    &'a Value,
 ) -> Pin<Box<dyn Future<Output = Result<FixResult, String>> + Send + 'a>>;
 
 /// 修复执行器枚举
@@ -214,6 +262,12 @@ pub fn all_fixers() -> Vec<FixerEntry> {
             definition: patch_anyrouter::definition,
             executor: FixerExecutor::Full(patch_anyrouter::execute),
         },
+        // 修复 #5：清理会话图片数据，解决 Request too large 错误（Entry 档位）
+        // 参见 GitHub issue: anthropics/claude-code#34751
+        FixerEntry {
+            definition: strip_images::definition,
+            executor: FixerExecutor::Entry(strip_images::execute),
+        },
     ]
 }
 
@@ -229,6 +283,7 @@ pub fn all_fixers() -> Vec<FixerEntry> {
 /// - `fixer_id` — 修复项的唯一标识符
 /// - `session_file_path` — 要修复的会话 JSONL 文件绝对路径
 /// - `cache` — AppCache 引用
+/// - `options` — 前端传递的可选参数（JSON 对象，无参数时为 Null）
 ///
 /// # 错误
 /// 未找到指定 ID 的修复项时返回错误
@@ -236,6 +291,7 @@ pub async fn execute_by_id(
     fixer_id: &str,
     session_file_path: &str,
     cache: &AppCache,
+    options: &Value,
 ) -> Result<FixResult, String> {
     let fixers = all_fixers();
 
@@ -254,7 +310,7 @@ pub async fn execute_by_id(
                 // 1. 框架读取所有消息
                 let mut messages = parser::read_messages(session_file_path).await?;
                 // 2. 修复逻辑在内存中操作消息列表
-                let result = exec_fn(&mut messages).await?;
+                let result = exec_fn(&mut messages, options).await?;
                 // 3. 仅当有实际修改时，框架自动覆写（含双重备份）
                 if result.affected_lines > 0 {
                     parser::write_messages(
@@ -275,7 +331,7 @@ pub async fn execute_by_id(
                     .await
                     .map_err(|e| format!("读取文件内容失败: {}", e))?;
                 // 2. 修复逻辑操作文本内容，返回新内容
-                let (result, new_content) = exec_fn(&content).await?;
+                let (result, new_content) = exec_fn(&content, options).await?;
                 // 3. 仅当有实际修改时，框架自动覆写
                 if result.affected_lines > 0 {
                     file_guard::safe_write_file(
@@ -293,12 +349,12 @@ pub async fn execute_by_id(
             FixerExecutor::File(exec_fn) => {
                 // 框架预先验证路径在 ~/.claude/ 下
                 file_guard::validate_claude_path(session_file_path)?;
-                exec_fn(session_file_path, cache).await
+                exec_fn(session_file_path, cache, options).await
             }
 
             // ---- Full 档位：完全权限，不做任何限制 ----
             FixerExecutor::Full(exec_fn) => {
-                exec_fn(session_file_path, cache).await
+                exec_fn(session_file_path, cache, options).await
             }
         };
     }

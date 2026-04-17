@@ -372,6 +372,7 @@ pub async fn list_fixers() -> Result<Vec<FixDefinition>, String> {
 /// # 参数
 /// - `fixer_id` - 修复项的唯一标识符（如 "strip_thinking"）
 /// - `session_file_path` - 要修复的会话 JSONL 文件的绝对路径
+/// - `options` - 可选的修复参数（JSON 对象），无参数时为 None
 /// - `cache` - Tauri managed state，传递给 file_guard 进行备份注册
 ///
 /// # 返回值
@@ -383,7 +384,9 @@ pub async fn list_fixers() -> Result<Vec<FixDefinition>, String> {
 pub async fn execute_fixer(
     fixer_id: String,
     session_file_path: String,
+    options: Option<serde_json::Value>,
     cache: State<'_, AppCache>,
 ) -> Result<FixResult, String> {
-    fixers::execute_by_id(&fixer_id, &session_file_path, &cache).await
+    let opts = options.unwrap_or(serde_json::Value::Null);
+    fixers::execute_by_id(&fixer_id, &session_file_path, &cache, &opts).await
 }

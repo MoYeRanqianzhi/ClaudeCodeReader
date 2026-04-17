@@ -54,6 +54,7 @@ pub fn definition() -> FixDefinition {
             "resume".to_string(),
         ],
         level: FixLevel::Entry,
+        options: vec![],
     }
 }
 
@@ -70,6 +71,7 @@ pub fn definition() -> FixDefinition {
 /// 失败时返回错误描述字符串。
 pub fn execute<'a>(
     messages: &'a mut Vec<SessionMessage>,
+    _options: &'a serde_json::Value,
 ) -> Pin<Box<dyn Future<Output = Result<FixResult, String>> + Send + 'a>> {
     Box::pin(execute_inner(messages))
 }

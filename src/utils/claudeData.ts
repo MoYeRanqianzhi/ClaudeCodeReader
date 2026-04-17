@@ -541,10 +541,15 @@ export async function listFixers(): Promise<FixDefinition[]> {
  *
  * @param fixerId - 修复项的唯一标识符（如 "strip_thinking"）
  * @param sessionFilePath - 要修复的会话 JSONL 文件的绝对路径
+ * @param options - 可选的修复参数（如 { keep_last: 3 }）
  * @returns FixResult，包含是否成功、结果消息和受影响行数
  */
-export async function executeFixer(fixerId: string, sessionFilePath: string): Promise<FixResult> {
-  return invoke<FixResult>('execute_fixer', { fixerId, sessionFilePath });
+export async function executeFixer(
+  fixerId: string,
+  sessionFilePath: string,
+  options?: Record<string, unknown>,
+): Promise<FixResult> {
+  return invoke<FixResult>('execute_fixer', { fixerId, sessionFilePath, options: options ?? null });
 }
 
 /**

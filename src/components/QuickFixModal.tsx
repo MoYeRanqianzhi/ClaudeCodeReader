@@ -12,7 +12,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Search, ArrowLeft, Wrench, CheckCircle, XCircle, Loader2, ChevronRight, List, FileText, HardDrive, ShieldAlert } from 'lucide-react';
-import type { FixDefinition, FixResult, FixLevel } from '../types/claude';
+import type { FixDefinition, FixResult, FixLevel, FixOptionDef } from '../types/claude';
 import { listFixers, executeFixer } from '../utils/claudeData';
 
 /**
@@ -92,6 +92,8 @@ export function QuickFixModal({
   const [executing, setExecuting] = useState(false);
   /** 修复执行结果（null 表示尚未执行） */
   const [result, setResult] = useState<FixResult | null>(null);
+  /** 修复参数值：key → value（从 FixOptionDef 的默认值初始化） */
+  const [optionValues, setOptionValues] = useState<Record<string, unknown>>({});
 
   /** 组件挂载时从 Rust 后端加载修复项列表 */
   useEffect(() => {
@@ -139,7 +141,9 @@ export function QuickFixModal({
     setResult(null);
 
     try {
-      const fixResult = await executeFixer(selectedFixer.id, sessionFilePath);
+      // 构建 options 对象：仅包含有定义的选项参数
+      const opts = selectedFixer.options.length > 0 ? optionValues : undefined;
+      const fixResult = await executeFixer(selectedFixer.id, sessionFilePath, opts);
       setResult(fixResult);
 
       // 修复成功且有实际修改时，通知父组件刷新会话数据
@@ -160,11 +164,27 @@ export function QuickFixModal({
   /**
    * 从详情视图返回列表视图
    *
-   * 清除选中状态和执行结果
+   * 清除选中状态、执行结果和参数值
    */
   const handleBack = () => {
     setSelectedFixer(null);
     setResult(null);
+    setOptionValues({});
+  };
+
+  /**
+   * 选中修复项进入详情视图
+   *
+   * 同时用修复项的 options 默认值初始化参数表单
+   */
+  const handleSelectFixer = (fixer: FixDefinition) => {
+    setSelectedFixer(fixer);
+    // 用默认值初始化参数
+    const defaults: Record<string, unknown> = {};
+    for (const opt of fixer.options) {
+      defaults[opt.key] = opt.defaultValue;
+    }
+    setOptionValues(defaults);
   };
 
   return (
@@ -263,7 +283,7 @@ export function QuickFixModal({
                       {filteredFixers.map((fixer) => (
                         <motion.button
                           key={fixer.id}
-                          onClick={() => setSelectedFixer(fixer)}
+                          onClick={() => handleSelectFixer(fixer)}
                           className="w-full flex items-center gap-3 p-3 rounded-lg bg-muted/50 hover:bg-accent/50 transition-colors text-left group"
                           whileHover={{ scale: 1.01 }}
                           whileTap={{ scale: 0.99 }}
@@ -357,6 +377,27 @@ export function QuickFixModal({
                     </div>
                   )}
 
+                  {/* 可配置参数 */}
+                  {selectedFixer.options.length > 0 && (
+                    <div>
+                      <label className="block text-sm font-medium text-foreground mb-2">
+                        修复参数
+                      </label>
+                      <div className="space-y-3">
+                        {selectedFixer.options.map((opt) => (
+                          <FixerOptionInput
+                            key={opt.key}
+                            option={opt}
+                            value={optionValues[opt.key]}
+                            onChange={(val) =>
+                              setOptionValues((prev) => ({ ...prev, [opt.key]: val }))
+                            }
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   {/* 执行结果 */}
                   {result && (
                     <motion.div
@@ -430,4 +471,75 @@ export function QuickFixModal({
       </motion.div>
     </motion.div>
   );
+}
+
+// ==================== 子组件 ====================
+
+/**
+ * 修复参数输入控件
+ *
+ * 根据 FixOptionDef 的 optionType 渲染对应的输入控件：
+ * - number: 数字输入框
+ * - boolean: 开关按钮
+ */
+function FixerOptionInput({
+  option,
+  value,
+  onChange,
+}: {
+  option: FixOptionDef;
+  value: unknown;
+  onChange: (val: unknown) => void;
+}) {
+  if (option.optionType === 'number') {
+    return (
+      <div className="flex items-center gap-3">
+        <label className="text-sm text-foreground flex-1 min-w-0">
+          <span className="font-medium">{option.label}</span>
+          {option.description && (
+            <span className="block text-xs text-muted-foreground mt-0.5">
+              {option.description}
+            </span>
+          )}
+        </label>
+        <input
+          type="number"
+          min={0}
+          value={typeof value === 'number' ? value : 0}
+          onChange={(e) => onChange(Math.max(0, parseInt(e.target.value) || 0))}
+          className="w-20 px-2 py-1.5 rounded-lg bg-muted border border-border text-sm text-foreground text-center focus:outline-none focus:ring-2 focus:ring-ring"
+        />
+      </div>
+    );
+  }
+
+  if (option.optionType === 'boolean') {
+    const checked = typeof value === 'boolean' ? value : false;
+    return (
+      <div className="flex items-center gap-3">
+        <label className="text-sm text-foreground flex-1 min-w-0">
+          <span className="font-medium">{option.label}</span>
+          {option.description && (
+            <span className="block text-xs text-muted-foreground mt-0.5">
+              {option.description}
+            </span>
+          )}
+        </label>
+        <button
+          onClick={() => onChange(!checked)}
+          className={`relative w-10 h-5 rounded-full transition-colors ${
+            checked ? 'bg-primary' : 'bg-muted-foreground/30'
+          }`}
+        >
+          <span
+            className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+              checked ? 'translate-x-5' : 'translate-x-0'
+            }`}
+          />
+        </button>
+      </div>
+    );
+  }
+
+  return null;
 }

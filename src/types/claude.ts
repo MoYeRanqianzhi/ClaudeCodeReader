@@ -653,6 +653,35 @@ export interface BackupConfig {
 export type FixLevel = 'entry' | 'content' | 'file' | 'full';
 
 /**
+ * 修复选项参数类型标识
+ *
+ * 标识前端应渲染哪种输入控件。
+ *
+ * 对应 Rust 后端 `services::fixers::FixOptionType` 枚举。
+ */
+export type FixOptionType = 'number' | 'boolean';
+
+/**
+ * 修复选项参数定义接口
+ *
+ * 描述一个修复项支持的可配置参数，前端据此渲染输入控件。
+ *
+ * 对应 Rust 后端 `services::fixers::FixOptionDef` 结构体。
+ */
+export interface FixOptionDef {
+  /** JSON 键名（如 "keep_last"），传递给 execute 时使用 */
+  key: string;
+  /** 显示标签（如 "保留最后 N 张图片"） */
+  label: string;
+  /** 参数类型，决定渲染的控件 */
+  optionType: FixOptionType;
+  /** 默认值 */
+  defaultValue: number | boolean;
+  /** 可选的补充说明 */
+  description?: string;
+}
+
+/**
  * 一键修复项定义接口
  *
  * 描述一个修复项的完整元数据，供弹窗列表展示和搜索过滤。
@@ -673,6 +702,8 @@ export interface FixDefinition {
   tags: string[];
   /** 修复档位级别，决定权限范围和 UI 标注样式 */
   level: FixLevel;
+  /** 可配置的选项参数列表（为空数组表示无需参数） */
+  options: FixOptionDef[];
 }
 
 /**

@@ -113,6 +113,7 @@ pub fn definition() -> FixDefinition {
             "router".to_string(),
         ],
         level: FixLevel::Full,
+        options: vec![],
     }
 }
 
@@ -130,6 +131,7 @@ pub fn definition() -> FixDefinition {
 pub fn execute<'a>(
     _session_file_path: &'a str,
     _cache: &'a AppCache,
+    _options: &'a serde_json::Value,
 ) -> Pin<Box<dyn Future<Output = Result<FixResult, String>> + Send + 'a>> {
     Box::pin(execute_inner())
 }
