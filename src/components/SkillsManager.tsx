@@ -349,11 +349,15 @@ function SkillListItem({ skill, onClick }: { skill: SkillInfo; onClick: () => vo
           <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0 ${config.color}`}>
             {config.badge}
           </span>
-          {/* user-invocable 标记 */}
+          {/* user-invocable 标记（title 放在 span 上而非 Icon 上，因为 lucide-react 的 Icon 类型不接受 title prop） */}
           {skill.userInvocable ? (
-            <Eye className="w-3 h-3 text-muted-foreground shrink-0" title="用户可调用" />
+            <span title="用户可调用" className="inline-flex shrink-0">
+              <Eye className="w-3 h-3 text-muted-foreground" />
+            </span>
           ) : (
-            <EyeOff className="w-3 h-3 text-muted-foreground/50 shrink-0" title="仅模型可调用" />
+            <span title="仅模型可调用" className="inline-flex shrink-0">
+              <EyeOff className="w-3 h-3 text-muted-foreground/50" />
+            </span>
           )}
         </div>
         <p className="text-xs text-muted-foreground truncate mt-0.5">
